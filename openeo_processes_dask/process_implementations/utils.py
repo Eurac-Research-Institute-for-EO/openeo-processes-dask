@@ -5,7 +5,7 @@ import xarray as xr
 
 def get_scalar_type(obj):
     if np.isscalar(obj):
-        return np.dtype(obj).type
+        return np.dtype(type(obj))
     if hasattr(obj, "dtype"):
         return obj.dtype
     return np.object_
