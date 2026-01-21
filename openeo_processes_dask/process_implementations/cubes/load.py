@@ -90,6 +90,7 @@ def _load_with_xcube_eopf(
     bands: Optional[list[str]] = None,
     resolution: Optional[float] = None,
     projection: Optional[Union[int, str]] = None,
+    dim_names: Optional[Dict[str, str]] = None,
 ) -> RasterCube:
     """Load data using xcube-eopf package for EOPF STAC endpoints."""
     try:
@@ -203,6 +204,76 @@ def load_stac(
     projection: Optional[Union[int, str]] = None,
     resampling: Optional[str] = None,
 ) -> RasterCube:
+
+    def get_dimension_names(collection_url: str) -> Dict[str, str]:
+        """Extract dimension names from STAC Collection's cube:dimensions."""
+        import requests
+        
+        # Default canonical openEO dimension names
+        dim_names = {
+            "x": "x",
+            "y": "y", 
+            "t": "t",
+            "bands": "bands"
+        }
+        
+        try:
+            # Fetch the collection metadata
+            response = requests.get(collection_url, timeout=10)
+            if response.status_code == 200:
+                collection_data = response.json()
+                
+                # Check if cube:dimensions exists
+                if ("properties" in collection_data and 
+                    "cube:dimensions" in collection_data["properties"]):
+                    
+                    cube_dims = collection_data["properties"]["cube:dimensions"]
+                    
+                    # Extract dimension names based on axis/type
+                    for dim_name, dim_info in cube_dims.items():
+                        if "axis" in dim_info and dim_info["axis"] == "x":
+                            dim_names["x"] = dim_name
+                        elif "axis" in dim_info and dim_info["axis"] == "y":
+                            dim_names["y"] = dim_name
+                        elif "type" in dim_info and dim_info["type"] == "temporal":
+                            dim_names["t"] = dim_name
+                        elif "type" in dim_info and dim_info["type"] == "bands":
+                            dim_names["bands"] = dim_name
+                            
+                    # NEW: Handle band name case normalization
+                    if dim_names["bands"] in cube_dims and "values" in cube_dims[dim_names["bands"]]:
+                        available_bands = cube_dims[dim_names["bands"]]["values"]
+                        # Store lowercase mapping for case-insensitive lookup
+                        dim_names["_band_case_map"] = {
+                            band.lower(): band for band in available_bands
+                        }
+            
+        except Exception as e:
+            logger.debug(f"Could not fetch collection metadata for dimension naming: {e}")
+            # Fall back to default names
+        
+        return dim_names
+    
+    # Get dimension names from the collection
+    dim_names = get_dimension_names(url)
+    target_x = dim_names.get("x", "x")
+    target_y = dim_names.get("y", "y")
+    target_t = dim_names.get("t", "t")
+    target_b = dim_names.get("bands", "bands")
+    
+    # NEW: Apply band name case normalization if needed
+    band_case_map = dim_names.get("_band_case_map")
+    if bands and band_case_map:
+        normalized_bands = []
+        for band in bands:
+            band_lower = band.lower()
+            if band_lower in band_case_map:
+                normalized_bands.append(band_case_map[band_lower])
+            else:
+                normalized_bands.append(band)
+                logger.warning(f"Band '{band}' not found in available bands, using as-is")
+        bands = normalized_bands
+
     # Check if this is an EOPF STAC URL
     if "stac.core.eopf.eodc.eu" in url:
         logger.info(f"Detected EOPF STAC URL: {url}, using xcube-eopf backend")
@@ -212,15 +283,41 @@ def load_stac(
         path_parts = PurePosixPath(unquote(parsed_url.path)).parts
         data_id = path_parts[-1] if path_parts else "sentinel-2-l2a"  # default fallback
 
-        # print(properties)
-
         # Use xcube-eopf for loading
-        return _load_with_xcube_eopf(
+        eopf_cube = _load_with_xcube_eopf(
             data_id=data_id,
             spatial_extent=spatial_extent,
             temporal_extent=temporal_extent,
             bands=bands,
         )
+        
+        # ------------------------------------------------------------
+        # NEW: Rename dimensions in EOPF output to match target names
+        # ------------------------------------------------------------
+        rename_dict = {}
+        
+        # Map spatial dimensions
+        spatial_dims = [d for d in eopf_cube.dims if d not in [target_t, target_b]]
+        if len(spatial_dims) == 2:
+            # Assume first is x, second is y (common convention)
+            rename_dict[spatial_dims[0]] = target_x
+            rename_dict[spatial_dims[1]] = target_y
+        
+        # Map time dimension if present
+        time_candidates = [d for d in eopf_cube.dims if d.lower() in ['time', 't', 'date']]
+        if time_candidates and target_t != time_candidates[0]:
+            rename_dict[time_candidates[0]] = target_t
+        
+        # Map band dimension if present (xcube-eopf often uses 'bands')
+        band_candidates = [d for d in eopf_cube.dims if d.lower() in ['band', 'bands', 'variable']]
+        if band_candidates and target_b != band_candidates[0]:
+            rename_dict[band_candidates[0]] = target_b
+        
+        if rename_dict:
+            eopf_cube = eopf_cube.rename(rename_dict)
+            
+        return eopf_cube
+
 
     # Original implementation for non-EOPF STAC URLs
     stac_type = _validate_stac(url)
@@ -395,7 +492,7 @@ def load_stac(
         )
         if not stack.rio.crs:
             stack.rio.write_crs(reference_system, inplace=True)
-        stack = stack.to_dataarray(dim="bands")
+        stack = stack.to_dataarray(dim=target_b)
     else:
         # If at least one band has the nodata field set, we have to apply it at loading time
         apply_nodata = True
@@ -424,16 +521,37 @@ def load_stac(
 
         if bands is not None:
             stack = odc.stac.load(items, bands=bands, chunks={}, **kwargs).to_dataarray(
-                dim="bands"
+                dim=target_b
             )
         else:
-            stack = odc.stac.load(items, chunks={}, **kwargs).to_dataarray(dim="bands")
+            stack = odc.stac.load(items, chunks={}, **kwargs).to_dataarray(dim=target_b)
 
     if spatial_extent is not None:
         stack = filter_bbox(stack, spatial_extent)
 
     if temporal_extent is not None and (stac_type == "ITEM" or zarr_assets):
         stack = filter_temporal(stack, temporal_extent)
+
+    rename_dict = {}
+
+    # Map spatial dimensions (odc-stac typically uses 'x', 'y' already)
+    if 'x' in stack.dims and target_x != 'x':
+        rename_dict['x'] = target_x
+    if 'y' in stack.dims and target_y != 'y':
+        rename_dict['y'] = target_y
+    
+    # Map time dimension (odc-stac typically uses 'time')
+    if 'time' in stack.dims and target_t != 'time':
+        rename_dict['time'] = target_t
+    
+    # Band dimension should already be correct from to_dataarray(dim=target_b)
+    # but check if it needs renaming from a generic name
+    band_candidates = [d for d in stack.dims if d not in [target_x, target_y, target_t]]
+    if len(band_candidates) == 1 and band_candidates[0] != target_b:
+        rename_dict[band_candidates[0]] = target_b
+    
+    if rename_dict:
+        stack = stack.rename(rename_dict)
 
     # If at least one band requires to apply scale and/or offset, the datatype of the whole DataArray must be cast to float -> do not apply it automatically yet. see https://github.com/Open-EO/openeo-processes/issues/503
     # b_dim = stack.openeo.band_dims[0]
