@@ -41,11 +41,9 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_stac(url):
-    import json
     logger.debug(f"Validating the provided STAC url: {url}")
     stac = stac_validator.StacValidate(url)
     is_valid_stac = stac.run()
-
     if not is_valid_stac:
         raise Exception(
             f"The provided link is not a valid STAC. stac-validator message: {stac.message}"
@@ -639,7 +637,7 @@ def load_stac(
 
         if bands is not None:
             stack = odc.stac.load(items, bands=bands, chunks={}, **kwargs).to_dataarray(
-                dim=target_b  # Use extracted dimension name (should be "band" from your JSON)
+                dim=target_b  # extracted dimension name 
             )
         else:
             stack = odc.stac.load(items, chunks={}, **kwargs).to_dataarray(dim=target_b)
