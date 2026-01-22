@@ -41,9 +41,11 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_stac(url):
+    import json
     logger.debug(f"Validating the provided STAC url: {url}")
     stac = stac_validator.StacValidate(url)
     is_valid_stac = stac.run()
+
     if not is_valid_stac:
         raise Exception(
             f"The provided link is not a valid STAC. stac-validator message: {stac.message}"
@@ -205,10 +207,8 @@ def load_stac(
     resampling: Optional[str] = None,
 ) -> RasterCube:
 
-    def get_dimension_names(collection_url: str) -> Dict[str, str]:
-        """Extract dimension names from STAC Collection's cube:dimensions."""
-        import requests
-        
+    def get_dimension_names_from_stac(stac_validator_obj) -> Dict[str, str]:
+        """Extract dimension names from STAC Collection's cube:dimensions using stac_validator object."""
         # Default canonical openEO dimension names
         dim_names = {
             "x": "x",
@@ -218,51 +218,82 @@ def load_stac(
         }
         
         try:
-            # Fetch the collection metadata
-            response = requests.get(collection_url, timeout=10)
-            if response.status_code == 200:
-                collection_data = response.json()
+            # Get the STAC content from the validator object
+            stac_content = stac_validator_obj.stac_content
+            
+            # Check if cube:dimensions exists in the STAC content
+            if "cube:dimensions" in stac_content:
+                cube_dims = stac_content["cube:dimensions"]
                 
-                # Check if cube:dimensions exists
-                if ("properties" in collection_data and 
-                    "cube:dimensions" in collection_data["properties"]):
-                    
-                    cube_dims = collection_data["properties"]["cube:dimensions"]
-                    
-                    # Extract dimension names based on axis/type
-                    for dim_name, dim_info in cube_dims.items():
-                        if "axis" in dim_info and dim_info["axis"] == "x":
-                            dim_names["x"] = dim_name
-                        elif "axis" in dim_info and dim_info["axis"] == "y":
-                            dim_names["y"] = dim_name
-                        elif "type" in dim_info and dim_info["type"] == "temporal":
-                            dim_names["t"] = dim_name
-                        elif "type" in dim_info and dim_info["type"] == "bands":
-                            dim_names["bands"] = dim_name
-                            
-                    # NEW: Handle band name case normalization
-                    if dim_names["bands"] in cube_dims and "values" in cube_dims[dim_names["bands"]]:
-                        available_bands = cube_dims[dim_names["bands"]]["values"]
-                        # Store lowercase mapping for case-insensitive lookup
+                # Extract dimension names based on axis/type
+                for dim_name, dim_info in cube_dims.items():
+                    if "axis" in dim_info and dim_info["axis"] == "x":
+                        dim_names["x"] = dim_name
+                    elif "axis" in dim_info and dim_info["axis"] == "y":
+                        dim_names["y"] = dim_name
+                    elif "type" in dim_info and dim_info["type"] == "temporal":
+                        dim_names["t"] = dim_name
+                    elif "type" in dim_info and dim_info["type"] == "bands":
+                        dim_names["bands"] = dim_name
+                        
+                # Store band case mapping if available
+                if dim_names["bands"] in cube_dims and "values" in cube_dims[dim_names["bands"]]:
+                    available_bands = cube_dims[dim_names["bands"]]["values"]
+                    dim_names["_band_case_map"] = {
+                        band.lower(): band for band in available_bands
+                    }
+                    dim_names["_available_bands"] = available_bands
+            else:
+                # If no cube:dimensions, try to get from eo:bands in summaries
+                if "summaries" in stac_content and "eo:bands" in stac_content["summaries"]:
+                    available_bands = [band.get("name") for band in stac_content["summaries"]["eo:bands"] if band.get("name")]
+                    if available_bands:
                         dim_names["_band_case_map"] = {
                             band.lower(): band for band in available_bands
                         }
-            
+                        dim_names["_available_bands"] = available_bands
+        
         except Exception as e:
-            logger.debug(f"Could not fetch collection metadata for dimension naming: {e}")
+            logger.debug(f"Could not extract dimension names from STAC content: {e}")
             # Fall back to default names
         
         return dim_names
+
+    # Validate STAC and get validator object
+    logger.debug(f"Validating the provided STAC url: {url}")
+    stac_validator_obj = stac_validator.StacValidate(url)
+    is_valid_stac = stac_validator_obj.run()
     
-    # Get dimension names from the collection
-    dim_names = get_dimension_names(url)
+    if not is_valid_stac:
+        raise Exception(
+            f"The provided link is not a valid STAC. stac-validator message: {stac_validator_obj.message}"
+        )
+    
+    # Get asset type from validator
+    if len(stac_validator_obj.message) == 1:
+        try:
+            asset_type = stac_validator_obj.message[0]["asset_type"]
+        except:
+            raise Exception(f"stac-validator returned an error: {stac_validator_obj.message}")
+    else:
+        raise Exception(
+            f"stac-validator returned multiple items, not supported yet. {stac_validator_obj.message}"
+        )
+    
+    # Get dimension names from the STAC validator object
+    dim_names = get_dimension_names_from_stac(stac_validator_obj)
     target_x = dim_names.get("x", "x")
     target_y = dim_names.get("y", "y")
     target_t = dim_names.get("t", "t")
     target_b = dim_names.get("bands", "bands")
     
-    # NEW: Apply band name case normalization if needed
+    # Store band case mapping for use later
     band_case_map = dim_names.get("_band_case_map")
+    available_bands_list = dim_names.get("_available_bands")
+    
+    logger.info(f"Extracted dimension names: x={target_x}, y={target_y}, t={target_t}, bands={target_b}")
+    
+    # NEW: Apply band name case normalization if needed
     if bands and band_case_map:
         normalized_bands = []
         for band in bands:
@@ -289,51 +320,81 @@ def load_stac(
             spatial_extent=spatial_extent,
             temporal_extent=temporal_extent,
             bands=bands,
+            dim_names=dim_names,  # Pass dimension names
         )
         
-        # ------------------------------------------------------------
-        # NEW: Rename dimensions in EOPF output to match target names
-        # ------------------------------------------------------------
+        # Better dimension mapping for EOPF output
         rename_dict = {}
         
-        # Map spatial dimensions
-        spatial_dims = [d for d in eopf_cube.dims if d not in [target_t, target_b]]
-        if len(spatial_dims) == 2:
-            # Assume first is x, second is y (common convention)
-            rename_dict[spatial_dims[0]] = target_x
-            rename_dict[spatial_dims[1]] = target_y
+        # Map spatial dimensions - EOPF often returns 'lon' and 'lat'
+        spatial_mapping = {
+            'lon': target_x,
+            'longitude': target_x,
+            'x': target_x,
+            'lat': target_y,
+            'latitude': target_y,
+            'y': target_y
+        }
+        
+        for dim in eopf_cube.dims:
+            dim_lower = dim.lower()
+            if dim_lower in spatial_mapping:
+                rename_dict[dim] = spatial_mapping[dim_lower]
         
         # Map time dimension if present
-        time_candidates = [d for d in eopf_cube.dims if d.lower() in ['time', 't', 'date']]
-        if time_candidates and target_t != time_candidates[0]:
-            rename_dict[time_candidates[0]] = target_t
+        time_mapping = {
+            'time': target_t,
+            't': target_t,
+            'date': target_t
+        }
         
-        # Map band dimension if present (xcube-eopf often uses 'bands')
-        band_candidates = [d for d in eopf_cube.dims if d.lower() in ['band', 'bands', 'variable']]
-        if band_candidates and target_b != band_candidates[0]:
-            rename_dict[band_candidates[0]] = target_b
+        for dim in eopf_cube.dims:
+            dim_lower = dim.lower()
+            if dim_lower in time_mapping and target_t != dim:
+                rename_dict[dim] = target_t
+                break
+        
+        # Map band dimension if present
+        band_mapping = {
+            'band': target_b,
+            'bands': target_b,
+            'variable': target_b,
+            'variables': target_b
+        }
+        
+        for dim in eopf_cube.dims:
+            dim_lower = dim.lower()
+            if dim_lower in band_mapping and target_b != dim:
+                rename_dict[dim] = target_b
+                break
         
         if rename_dict:
             eopf_cube = eopf_cube.rename(rename_dict)
             
+        # Ensure we have the right dimension order (t, bands, y, x)
+        desired_order = [target_t, target_b, target_y, target_x]
+        current_dims = list(eopf_cube.dims)
+        
+        # Reorder if needed
+        if set(current_dims) == set(desired_order) and current_dims != desired_order:
+            eopf_cube = eopf_cube.transpose(*desired_order)
+            
         return eopf_cube
 
-
     # Original implementation for non-EOPF STAC URLs
-    stac_type = _validate_stac(url)
-
+    # stac_type is already set from validator above
+    
     # TODO: load_stac should have a parameter to enable scale and offset?
 
     if isinstance(bands, str):
         bands = [bands]
 
-    if stac_type == "COLLECTION":
+    if asset_type == "COLLECTION":
         # If query parameters are passed, try to get the parent Catalog if possible/exists, to use the /search endpoint
         if spatial_extent or temporal_extent or bands or properties:
             catalog_url, collection_id = _search_for_parent_catalog(url)
 
             # Check if we are connecting to Microsoft Planetary Computer, where we need to sign the connection
-
             modifier = pc.sign_inplace if "planetarycomputer" in catalog_url else None
             catalog = pystac_client.Client.open(catalog_url, modifier=modifier)
             query_params = {"collections": [collection_id]}
@@ -374,17 +435,46 @@ def load_stac(
 
             items = catalog.search(**query_params).item_collection()
         else:
-            # Load the whole collection wihout filters
+            # Load the whole collection without filters
             raise Exception(
                 "No parameters for filtering provided. Loading the whole STAC Collection is not supported yet."
             )
-    elif stac_type == "ITEM":
+    elif asset_type == "ITEM":
+        # For STAC Items, we need to get the collection URL from the item
         stac_api = pystac_client.stac_api_io.StacApiIO()
         stac_dict = json.loads(stac_api.read_text(url))
         items = [stac_api.stac_object_from_dict(stac_dict)]
+        
+        # Try to get collection URL from the item
+        item = items[0]
+        collection_url = None
+        if hasattr(item, 'collection_id') and item.collection_id:
+            # Try to construct collection URL
+            parsed = urlparse(url)
+            # Remove the item ID from path to get collection
+            path = PurePosixPath(parsed.path)
+            if len(path.parts) > 1:
+                collection_path = str(path.parent)
+                collection_url = f"{parsed.scheme}://{parsed.netloc}{collection_path}"
+                # Re-validate the collection to get its dimension names
+                try:
+                    coll_validator = stac_validator.StacValidate(collection_url)
+                    if coll_validator.run():
+                        coll_dim_names = get_dimension_names_from_stac(coll_validator)
+                        # Update targets with collection dimension names
+                        target_x = coll_dim_names.get("x", target_x)
+                        target_y = coll_dim_names.get("y", target_y)
+                        target_t = coll_dim_names.get("t", target_t)
+                        target_b = coll_dim_names.get("bands", target_b)
+                        
+                        # Update band case mapping
+                        band_case_map = coll_dim_names.get("_band_case_map", band_case_map)
+                        available_bands_list = coll_dim_names.get("_available_bands", available_bands_list)
+                except:
+                    pass  # Keep existing dim_names if collection fetch fails
     else:
         raise Exception(
-            f"The provided URL is a STAC {stac_type}, which is not yet supported. Please provide a valid URL to a STAC Collection or Item."
+            f"The provided URL is a STAC {asset_type}, which is not yet supported. Please provide a valid URL to a STAC Collection or Item."
         )
 
     available_assets = {tuple(i.assets.keys()) for i in items}
@@ -438,9 +528,20 @@ def load_stac(
     if "properties" in item_dict and "cube:variables" in item_dict["properties"]:
         available_variables = list(item_dict["properties"]["cube:variables"].keys())
 
+    # FIX: Apply band case normalization for available_variables too
+    if available_bands_list and available_variables:
+        # Update available_variables with normalized names
+        available_variables = available_bands_list
+
     if bands is not None:
         if zarr_assets and available_variables:
-            missing_bands = set(bands) - set(available_variables)
+            # Use case-insensitive matching for bands
+            available_vars_lower = [v.lower() for v in available_variables]
+            missing_bands = []
+            for band in bands:
+                if band.lower() not in available_vars_lower:
+                    missing_bands.append(band)
+            
             if missing_bands:
                 raise OpenEOException(
                     f"The following requested bands were not found: {missing_bands}. "
@@ -452,6 +553,7 @@ def load_stac(
                     f"The provided bands: {bands} can't be found in the STAC assets: {available_assets}"
                 )
 
+    # Get reference system from cube:dimensions if available
     reference_system = None
     if "properties" in item_dict and "cube:dimensions" in item_dict["properties"]:
         for d in item_dict["properties"]["cube:dimensions"]:
@@ -483,16 +585,34 @@ def load_stac(
 
                 ds = xr.open_dataset(asset.href, **kwargs)
                 if bands is not None and available_variables:
-                    vars_to_load = [b for b in bands if b in ds.data_vars]
-                    ds = ds[vars_to_load]
+                    # Use case-insensitive matching for bands
+                    vars_to_load = []
+                    for band in bands:
+                        # Try exact match first
+                        if band in ds.data_vars:
+                            vars_to_load.append(band)
+                        else:
+                            # Try case-insensitive match
+                            for var_name in ds.data_vars:
+                                if var_name.lower() == band.lower():
+                                    vars_to_load.append(var_name)
+                                    break
+                    
+                    if vars_to_load:
+                        ds = ds[vars_to_load]
+                    else:
+                        logger.warning(f"No matching bands found in dataset for requested bands: {bands}")
                 datasets.append(ds)
 
-        stack = xr.combine_by_coords(
-            datasets, join="exact", combine_attrs="drop_conflicts"
-        )
-        if not stack.rio.crs:
-            stack.rio.write_crs(reference_system, inplace=True)
-        stack = stack.to_dataarray(dim=target_b)
+        if datasets:
+            stack = xr.combine_by_coords(
+                datasets, join="exact", combine_attrs="drop_conflicts"
+            )
+            if not stack.rio.crs:
+                stack.rio.write_crs(reference_system, inplace=True)
+            stack = stack.to_dataarray(dim=target_b)
+        else:
+            raise NoDataAvailable("No data could be loaded from the STAC items.")
     else:
         # If at least one band has the nodata field set, we have to apply it at loading time
         apply_nodata = True
@@ -516,12 +636,10 @@ def load_stac(
             dtype = list(dtype_set)[0]
             if dtype is not None:
                 kwargs["nodata"] = np.dtype(dtype).type(kwargs["nodata"])
-        # TODO: the dimension names (like "bands") should come from the STAC metadata and not hardcoded
-        # Note: unfortunately, converting the dataset to a dataarray, casts all the data types to the same
 
         if bands is not None:
             stack = odc.stac.load(items, bands=bands, chunks={}, **kwargs).to_dataarray(
-                dim=target_b
+                dim=target_b  # Use extracted dimension name (should be "band" from your JSON)
             )
         else:
             stack = odc.stac.load(items, chunks={}, **kwargs).to_dataarray(dim=target_b)
@@ -529,29 +647,64 @@ def load_stac(
     if spatial_extent is not None:
         stack = filter_bbox(stack, spatial_extent)
 
-    if temporal_extent is not None and (stac_type == "ITEM" or zarr_assets):
+    if temporal_extent is not None and (asset_type == "ITEM" or zarr_assets):
         stack = filter_temporal(stack, temporal_extent)
 
-    rename_dict = {}
-
-    # Map spatial dimensions (odc-stac typically uses 'x', 'y' already)
-    if 'x' in stack.dims and target_x != 'x':
-        rename_dict['x'] = target_x
-    if 'y' in stack.dims and target_y != 'y':
-        rename_dict['y'] = target_y
-    
-    # Map time dimension (odc-stac typically uses 'time')
-    if 'time' in stack.dims and target_t != 'time':
-        rename_dict['time'] = target_t
-    
-    # Band dimension should already be correct from to_dataarray(dim=target_b)
-    # but check if it needs renaming from a generic name
-    band_candidates = [d for d in stack.dims if d not in [target_x, target_y, target_t]]
-    if len(band_candidates) == 1 and band_candidates[0] != target_b:
-        rename_dict[band_candidates[0]] = target_b
-    
-    if rename_dict:
-        stack = stack.rename(rename_dict)
+    # Apply dimension renaming to match STAC collection dimension names
+    if hasattr(stack, 'dims'):
+        rename_dict = {}
+        
+        # Check each dimension in the loaded data
+        for dim in stack.dims:
+            dim_lower = dim.lower()
+            
+            # Map based on common patterns
+            if dim_lower in ['x', 'longitude', 'lon'] and dim != target_x:
+                rename_dict[dim] = target_x
+            elif dim_lower in ['y', 'latitude', 'lat'] and dim != target_y:
+                rename_dict[dim] = target_y
+            elif dim_lower in ['t', 'time', 'date', 'datetime'] and dim != target_t:
+                rename_dict[dim] = target_t
+            elif dim_lower in ['band', 'bands', 'variable', 'variables'] and dim != target_b:
+                rename_dict[dim] = target_b
+        
+        # Also handle case-insensitive exact matches
+        for dim in stack.dims:
+            if dim.lower() == target_x.lower() and dim != target_x:
+                rename_dict[dim] = target_x
+            elif dim.lower() == target_y.lower() and dim != target_y:
+                rename_dict[dim] = target_y
+            elif dim.lower() == target_t.lower() and dim != target_t:
+                rename_dict[dim] = target_t
+            elif dim.lower() == target_b.lower() and dim != target_b:
+                rename_dict[dim] = target_b
+        
+        # Apply renaming if needed
+        if rename_dict:
+            logger.info(f"Renaming dimensions: {rename_dict}")
+            stack = stack.rename(rename_dict)
+        
+        # Reorder dimensions to openEO canonical order (t, bands, y, x)
+        current_dims = list(stack.dims)
+        desired_order = []
+        
+        # Try to get t, bands, y, x in that order (openEO canonical)
+        for dim_name in [target_t, target_b, target_y, target_x]:
+            if dim_name in stack.dims:
+                desired_order.append(dim_name)
+        
+        # Add any remaining dimensions
+        for dim in current_dims:
+            if dim not in desired_order:
+                desired_order.append(dim)
+        
+        # Only transpose if order is different
+        if current_dims != desired_order:
+            logger.info(f"Reordering dimensions from {current_dims} to {desired_order}")
+            try:
+                stack = stack.transpose(*desired_order)
+            except Exception as e:
+                logger.warning(f"Could not reorder dimensions: {e}")
 
     # If at least one band requires to apply scale and/or offset, the datatype of the whole DataArray must be cast to float -> do not apply it automatically yet. see https://github.com/Open-EO/openeo-processes/issues/503
     # b_dim = stack.openeo.band_dims[0]
