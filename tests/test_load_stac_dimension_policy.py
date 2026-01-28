@@ -1,6 +1,7 @@
 import pytest
 from openeo.local import LocalConnection
 
+
 @pytest.fixture(scope="module")
 def local_conn():
     # Use current folder as local backend root (same as your snippets)
@@ -46,11 +47,13 @@ def local_conn():
         ),
     ],
 )
-def test_load_stac_dimension_names_and_order(local_conn, case_name, kwargs, expected_dims):
+def test_load_stac_dimension_names_and_order(
+    local_conn, case_name, kwargs, expected_dims
+):
     cube = local_conn.load_stac(**kwargs)
     arr = cube.execute()
 
     # xarray DataArray: dims is a tuple in order
-    assert tuple(arr.dims) == tuple(expected_dims), (
-        f"{case_name}: expected dims {expected_dims}, got {arr.dims}"
-    )
+    assert tuple(arr.dims) == tuple(
+        expected_dims
+    ), f"{case_name}: expected dims {expected_dims}, got {arr.dims}"
