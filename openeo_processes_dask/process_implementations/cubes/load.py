@@ -45,17 +45,19 @@ def _validate_stac_and_get_type(url):
     logger.debug(f"Validating the provided STAC url: {url}")
     stac_validator_obj = stac_validator.StacValidate(url)
     is_valid_stac = stac_validator_obj.run()
-    
+
     if not is_valid_stac:
         raise Exception(
             f"The provided link is not a valid STAC. stac-validator message: {stac_validator_obj.message}"
         )
-    
+
     if len(stac_validator_obj.message) == 1:
         try:
             return stac_validator_obj.message[0]["asset_type"], stac_validator_obj
         except:
-            raise Exception(f"stac-validator returned an error: {stac_validator_obj.message}")
+            raise Exception(
+                f"stac-validator returned an error: {stac_validator_obj.message}"
+            )
     else:
         raise Exception(
             f"stac-validator returned multiple items, not supported yet. {stac_validator_obj.message}"
@@ -121,10 +123,7 @@ def _get_dimension_names_from_stac(stac_validator_obj):
                 dim_names["_available_bands"] = available_bands
         else:
             # If no cube:dimensions, try to get from eo:bands in summaries
-            if (
-                "summaries" in stac_content
-                and "eo:bands" in stac_content["summaries"]
-            ):
+            if "summaries" in stac_content and "eo:bands" in stac_content["summaries"]:
                 available_bands = [
                     band.get("name")
                     for band in stac_content["summaries"]["eo:bands"]
@@ -147,7 +146,7 @@ def _normalize_band_names(bands, band_case_map=None, available_bands_list=None):
     """Normalize band names to match STAC collection casing."""
     if not bands or not band_case_map:
         return bands
-    
+
     normalized_bands = []
     for band in bands:
         band_lower = band.lower()
@@ -155,9 +154,7 @@ def _normalize_band_names(bands, band_case_map=None, available_bands_list=None):
             normalized_bands.append(band_case_map[band_lower])
         else:
             normalized_bands.append(band)
-            logger.warning(
-                f"Band '{band}' not found in available bands, using as-is"
-            )
+            logger.warning(f"Band '{band}' not found in available bands, using as-is")
     return normalized_bands
 
 
@@ -165,12 +162,13 @@ def _spatial_extent_to_bbox(spatial_extent):
     """Convert spatial extent to bbox with proper projection handling."""
     if spatial_extent is None:
         return None, None, None
-    
+
     try:
         from pyproj import CRS
+
         crs_obj = CRS(spatial_extent.crs) if spatial_extent.crs else CRS("EPSG:4326")
         epsg = crs_obj.to_epsg()
-        
+
         if epsg == 4326:
             projection = "EPSG:4326"
             resolution = 10 / 111320
@@ -183,14 +181,14 @@ def _spatial_extent_to_bbox(spatial_extent):
                 f"Unsupported CRS: {crs_obj.to_string()} "
                 "(only EPSG:4326 or UTM EPSG:32601–32660 / 32701–32760 are supported)"
             )
-        
+
         bbox = [
             spatial_extent.west,
             spatial_extent.south,
             spatial_extent.east,
             spatial_extent.north,
         ]
-        
+
         return bbox, projection, resolution
     except Exception as e:
         raise Exception(f"Unable to parse the provided spatial extent: {e}")
@@ -200,7 +198,7 @@ def _temporal_extent_to_range(temporal_extent):
     """Convert temporal extent to time range strings."""
     if temporal_extent is None:
         return None
-    
+
     start_date = (
         str(temporal_extent[0].to_numpy().astype("datetime64[D]"))
         if temporal_extent[0] is not None
@@ -211,7 +209,7 @@ def _temporal_extent_to_range(temporal_extent):
         if temporal_extent[1] is not None
         else None
     )
-    
+
     return [start_date, end_date]
 
 
@@ -219,20 +217,20 @@ def _extract_asset_metadata(items):
     """Extract scale, offset, and other metadata from STAC assets."""
     if not items:
         return {}, False, False, False
-    
+
     available_assets = {tuple(i.assets.keys()) for i in items}
     if len(available_assets) > 1:
         raise OpenEOException(
             f"The resulting STAC Items contain two separate set of assets: {available_assets}. We can't load them at the same time."
         )
-    
+
     available_assets = [x for t in available_assets for x in t]
-    
+
     asset_scale_offset = {}
     zarr_assets = False
     use_xarray_open_kwargs = False
     use_xarray_storage_options = False
-    
+
     for asset in available_assets:
         asset_dict = items[0].assets[asset].to_dict()
         asset_scale = 1
@@ -240,23 +238,23 @@ def _extract_asset_metadata(items):
         asset_nodata = None
         asset_dtype = None
         asset_type = None
-        
+
         if "raster:bands" in asset_dict:
             asset_scale = asset_dict["raster:bands"][0].get("scale", 1)
             asset_offset = asset_dict["raster:bands"][0].get("offset", 0)
             asset_nodata = asset_dict["raster:bands"][0].get("nodata", None)
             asset_dtype = asset_dict["raster:bands"][0].get("data_type", None)
-        
+
         if "type" in asset_dict:
             asset_type = asset_dict["type"]
             if asset_type == "application/vnd+zarr":
                 zarr_assets = True
-        
+
         if "xarray:open_kwargs" in asset_dict:
             use_xarray_open_kwargs = True
         if "xarray:storage_options" in asset_dict:
             use_xarray_storage_options = True
-        
+
         asset_scale_offset[asset] = {
             "scale": asset_scale,
             "offset": asset_offset,
@@ -264,18 +262,23 @@ def _extract_asset_metadata(items):
             "data_type": asset_dtype,
             "type": asset_type,
         }
-    
-    return asset_scale_offset, zarr_assets, use_xarray_open_kwargs, use_xarray_storage_options
+
+    return (
+        asset_scale_offset,
+        zarr_assets,
+        use_xarray_open_kwargs,
+        use_xarray_storage_options,
+    )
 
 
 def _create_dimension_mapping(stack, target_x, target_y, target_t, target_b):
     """Create dimension renaming mapping based on target names."""
     rename_dict = {}
-    
+
     # Check each dimension in the loaded data
     for dim in stack.dims:
         dim_lower = dim.lower()
-        
+
         # Map based on common patterns
         if dim_lower in ["x", "longitude", "lon"] and dim != target_x:
             rename_dict[dim] = target_x
@@ -283,9 +286,11 @@ def _create_dimension_mapping(stack, target_x, target_y, target_t, target_b):
             rename_dict[dim] = target_y
         elif dim_lower in ["t", "time", "date", "datetime"] and dim != target_t:
             rename_dict[dim] = target_t
-        elif dim_lower in ["band", "bands", "variable", "variables"] and dim != target_b:
+        elif (
+            dim_lower in ["band", "bands", "variable", "variables"] and dim != target_b
+        ):
             rename_dict[dim] = target_b
-    
+
     # Also handle case-insensitive exact matches
     for dim in stack.dims:
         if dim.lower() == target_x.lower() and dim != target_x:
@@ -296,7 +301,7 @@ def _create_dimension_mapping(stack, target_x, target_y, target_t, target_b):
             rename_dict[dim] = target_t
         elif dim.lower() == target_b.lower() and dim != target_b:
             rename_dict[dim] = target_b
-    
+
     return rename_dict
 
 
@@ -304,17 +309,17 @@ def _reorder_dimensions(stack, target_t, target_b, target_y, target_x):
     """Reorder dimensions to openEO canonical order (t, bands, y, x)."""
     current_dims = list(stack.dims)
     desired_order = []
-    
+
     # Try to get t, bands, y, x in that order (openEO canonical)
     for dim_name in [target_t, target_b, target_y, target_x]:
         if dim_name in stack.dims:
             desired_order.append(dim_name)
-    
+
     # Add any remaining dimensions
     for dim in current_dims:
         if dim not in desired_order:
             desired_order.append(dim)
-    
+
     # Only transpose if order is different
     if current_dims != desired_order:
         logger.info(f"Reordering dimensions from {current_dims} to {desired_order}")
@@ -322,7 +327,7 @@ def _reorder_dimensions(stack, target_t, target_b, target_y, target_x):
             stack = stack.transpose(*desired_order)
         except Exception as e:
             logger.warning(f"Could not reorder dimensions: {e}")
-    
+
     return stack
 
 
@@ -348,15 +353,23 @@ def _load_with_xcube_eopf(
 
     # Convert spatial extent
     bbox, projection_used, resolution_used = _spatial_extent_to_bbox(spatial_extent)
-    
+
     # Convert temporal extent
     time_range = _temporal_extent_to_range(temporal_extent)
 
     # Set CRS
-    crs = projection if projection else (projection_used if projection_used else "EPSG:4326")
+    crs = (
+        projection
+        if projection
+        else (projection_used if projection_used else "EPSG:4326")
+    )
 
     # Set resolution
-    spatial_res = resolution if resolution else (resolution_used if resolution_used else 10 / 111320)
+    spatial_res = (
+        resolution
+        if resolution
+        else (resolution_used if resolution_used else 10 / 111320)
+    )
 
     # Create store and open data
     store = new_data_store("eopf-zarr")
@@ -439,18 +452,12 @@ def _process_eopf_cube(eopf_cube, target_x, target_y, target_t, target_b):
 
     # Reorder dimensions
     eopf_cube = _reorder_dimensions(eopf_cube, target_t, target_b, target_y, target_x)
-    
+
     return eopf_cube
 
 
 def _process_stac_collection(
-    url,
-    spatial_extent,
-    temporal_extent,
-    bands,
-    properties,
-    catalog_url,
-    collection_id
+    url, spatial_extent, temporal_extent, bands, properties, catalog_url, collection_id
 ):
     """Process STAC collection with filters."""
     # Check if we are connecting to Microsoft Planetary Computer
@@ -463,9 +470,7 @@ def _process_stac_collection(
             spatial_extent_4326 = spatial_extent
             if spatial_extent.crs is not None:
                 if not pyproj.crs.CRS(spatial_extent.crs).equals("EPSG:4326"):
-                    spatial_extent_4326 = _reproject_bbox(
-                        spatial_extent, "EPSG:4326"
-                    )
+                    spatial_extent_4326 = _reproject_bbox(spatial_extent, "EPSG:4326")
             bbox = [
                 spatial_extent_4326.west,
                 spatial_extent_4326.south,
@@ -496,7 +501,9 @@ def _process_stac_collection(
     return items
 
 
-def _process_stac_item(url, target_x, target_y, target_t, target_b, band_case_map, available_bands_list):
+def _process_stac_item(
+    url, target_x, target_y, target_t, target_b, band_case_map, available_bands_list
+):
     """Process STAC item and update dimension names from collection if available."""
     stac_api = pystac_client.stac_api_io.StacApiIO()
     stac_dict = json.loads(stac_api.read_text(url))
@@ -525,19 +532,32 @@ def _process_stac_item(url, target_x, target_y, target_t, target_b, band_case_ma
                     target_b = coll_dim_names.get("bands", target_b)
 
                     # Update band case mapping
-                    band_case_map = coll_dim_names.get(
-                        "_band_case_map", band_case_map
-                    )
+                    band_case_map = coll_dim_names.get("_band_case_map", band_case_map)
                     available_bands_list = coll_dim_names.get(
                         "_available_bands", available_bands_list
                     )
             except:
                 pass  # Keep existing dim_names if collection fetch fails
-    
-    return items, target_x, target_y, target_t, target_b, band_case_map, available_bands_list
+
+    return (
+        items,
+        target_x,
+        target_y,
+        target_t,
+        target_b,
+        band_case_map,
+        available_bands_list,
+    )
 
 
-def _load_zarr_assets(items, bands, target_b, reference_system, use_xarray_open_kwargs, use_xarray_storage_options):
+def _load_zarr_assets(
+    items,
+    bands,
+    target_b,
+    reference_system,
+    use_xarray_open_kwargs,
+    use_xarray_storage_options,
+):
     """Load Zarr assets from STAC items."""
     datasets = []
     for item in items:
@@ -559,10 +579,10 @@ def _load_zarr_assets(items, bands, target_b, reference_system, use_xarray_open_
                     }
 
             ds = xr.open_dataset(asset.href, **kwargs)
-            
+
             # Get available variables from dataset
             available_variables = list(ds.data_vars.keys())
-            
+
             if bands is not None and available_variables:
                 # Use case-insensitive matching for bands
                 vars_to_load = []
@@ -594,11 +614,13 @@ def _load_zarr_assets(items, bands, target_b, reference_system, use_xarray_open_
         stack = stack.to_dataarray(dim=target_b)
     else:
         raise NoDataAvailable("No data could be loaded from the STAC items.")
-    
+
     return stack
 
 
-def _load_non_zarr_assets(items, bands, target_b, resolution, projection, resampling, asset_scale_offset):
+def _load_non_zarr_assets(
+    items, bands, target_b, resolution, projection, resampling, asset_scale_offset
+):
     """Load non-Zarr assets from STAC items."""
     # If at least one band has the nodata field set, we have to apply it at loading time
     apply_nodata = True
@@ -628,7 +650,7 @@ def _load_non_zarr_assets(items, bands, target_b, resolution, projection, resamp
         )
     else:
         stack = odc.stac.load(items, chunks={}, **kwargs).to_dataarray(dim=target_b)
-    
+
     return stack
 
 
@@ -683,7 +705,9 @@ def load_stac(
         )
 
         # Process and rename dimensions
-        eopf_cube = _process_eopf_cube(eopf_cube, target_x, target_y, target_t, target_b)
+        eopf_cube = _process_eopf_cube(
+            eopf_cube, target_x, target_y, target_t, target_b
+        )
         return eopf_cube
 
     # Original implementation for non-EOPF STAC URLs
@@ -700,8 +724,13 @@ def load_stac(
         if spatial_extent or temporal_extent or bands or properties:
             catalog_url, collection_id = _search_for_parent_catalog(url)
             items = _process_stac_collection(
-                url, spatial_extent, temporal_extent, bands, properties,
-                catalog_url, collection_id
+                url,
+                spatial_extent,
+                temporal_extent,
+                bands,
+                properties,
+                catalog_url,
+                collection_id,
             )
         else:
             # Load the whole collection without filters
@@ -709,8 +738,22 @@ def load_stac(
                 "No parameters for filtering provided. Loading the whole STAC Collection is not supported yet."
             )
     elif asset_type == "ITEM":
-        items, target_x, target_y, target_t, target_b, band_case_map, available_bands_list = _process_stac_item(
-            url, target_x, target_y, target_t, target_b, band_case_map, available_bands_list
+        (
+            items,
+            target_x,
+            target_y,
+            target_t,
+            target_b,
+            band_case_map,
+            available_bands_list,
+        ) = _process_stac_item(
+            url,
+            target_x,
+            target_y,
+            target_t,
+            target_b,
+            band_case_map,
+            available_bands_list,
         )
     else:
         raise Exception(
@@ -718,11 +761,16 @@ def load_stac(
         )
 
     # Extract asset metadata
-    asset_scale_offset, zarr_assets, use_xarray_open_kwargs, use_xarray_storage_options = _extract_asset_metadata(items)
+    (
+        asset_scale_offset,
+        zarr_assets,
+        use_xarray_open_kwargs,
+        use_xarray_storage_options,
+    ) = _extract_asset_metadata(items)
 
     # Get item dictionary for additional metadata
     item_dict = items[0].to_dict() if items else {}
-    
+
     # Get available variables
     available_variables = []
     if "properties" in item_dict and "cube:variables" in item_dict["properties"]:
@@ -767,12 +815,22 @@ def load_stac(
     # Load data based on asset type
     if zarr_assets:
         stack = _load_zarr_assets(
-            items, bands, target_b, reference_system,
-            use_xarray_open_kwargs, use_xarray_storage_options
+            items,
+            bands,
+            target_b,
+            reference_system,
+            use_xarray_open_kwargs,
+            use_xarray_storage_options,
         )
     else:
         stack = _load_non_zarr_assets(
-            items, bands, target_b, resolution, projection, resampling, asset_scale_offset
+            items,
+            bands,
+            target_b,
+            resolution,
+            projection,
+            resampling,
+            asset_scale_offset,
         )
 
     # Apply spatial filter if needed
@@ -785,8 +843,10 @@ def load_stac(
 
     # Apply dimension renaming to match STAC collection dimension names
     if hasattr(stack, "dims"):
-        rename_dict = _create_dimension_mapping(stack, target_x, target_y, target_t, target_b)
-        
+        rename_dict = _create_dimension_mapping(
+            stack, target_x, target_y, target_t, target_b
+        )
+
         # Apply renaming if needed
         if rename_dict:
             logger.info(f"Renaming dimensions: {rename_dict}")
@@ -840,6 +900,7 @@ def load_url(url: str, format: str, options={}):
 
     elif "Parquet" in format:
         import os
+
         import geoparquet as gpq
 
         file_name = url.split("/")[-1]
