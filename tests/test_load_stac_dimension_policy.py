@@ -14,7 +14,7 @@ def local_conn():
         (
             "case1_eopf_core",
             dict(
-                url="https://stac.core.eopf.eodc.eu/collections/sentinel-2-l2a",
+                url="./tests/data/stac/s2_sample_dimension_policy_case_1.json",
                 spatial_extent=dict(
                     west=9.669372670305636,
                     south=53.64026948239441,
@@ -29,7 +29,7 @@ def local_conn():
         (
             "case2_planetarycomputer",
             dict(
-                url="https://planetarycomputer.microsoft.com/api/stac/v1/collections/sentinel-2-l2a",
+                url="./tests/data/stac/s2_sample_dimension_policy_case_2.json",
                 spatial_extent=dict(west=11, east=12, south=46, north=47),
                 temporal_extent=["2019-01-01", "2019-06-15"],
                 bands=["B04"],
@@ -40,7 +40,7 @@ def local_conn():
         (
             "case3_eurac_sample",
             dict(
-                url="https://stac.eurac.edu/collections/SENTINEL2_L2A_SAMPLE_2",
+                url="./tests/data/stac/s2_sample_dimension_policy_case_3.json",
                 bands=["B04"],
             ),
             ("time", "band", "y", "x"),
