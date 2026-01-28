@@ -1,18 +1,34 @@
 import pytest
-from openeo.local import LocalConnection
+
+from openeo_processes_dask.process_implementations.cubes.load import load_stac
 
 
-@pytest.fixture(scope="module")
-def local_conn():
-    # Use current folder as local backend root (same as your snippets)
-    return LocalConnection("./")
+def _cube_dims_in_order(cube):
+    """
+    Return dimension names in order from the underlying xarray object.
+
+    - If cube is a DataArray: dims is already ordered
+    - If cube is a Dataset: pick the first data_var and use its ordered dims
+      (Dataset.dims is a mapping => no guaranteed order)
+    """
+    # DataArray
+    if hasattr(cube, "dims") and isinstance(cube.dims, tuple):
+        return tuple(cube.dims)
+
+    # Dataset
+    if hasattr(cube, "data_vars") and len(cube.data_vars) > 0:
+        first_var = next(iter(cube.data_vars))
+        return tuple(cube[first_var].dims)
+
+    # Fallback (shouldn't happen)
+    return tuple(getattr(cube, "dims", ()))
 
 
 @pytest.mark.parametrize(
     "case_name, kwargs, expected_dims",
     [
         (
-            "case1_eopf_core",
+            "case1_eopf_core_local_item",
             dict(
                 url="./tests/data/stac/s2_sample_dimension_policy_case_1.json",
                 spatial_extent=dict(
@@ -27,7 +43,7 @@ def local_conn():
             ("t", "bands", "y", "x"),
         ),
         (
-            "case2_planetarycomputer",
+            "case2_planetarycomputer_local_item",
             dict(
                 url="./tests/data/stac/s2_sample_dimension_policy_case_2.json",
                 spatial_extent=dict(west=11, east=12, south=46, north=47),
@@ -38,7 +54,7 @@ def local_conn():
             ("t", "bands", "y", "x"),
         ),
         (
-            "case3_eurac_sample",
+            "case3_eurac_local_item",
             dict(
                 url="./tests/data/stac/s2_sample_dimension_policy_case_3.json",
                 bands=["B04"],
@@ -47,13 +63,10 @@ def local_conn():
         ),
     ],
 )
-def test_load_stac_dimension_names_and_order(
-    local_conn, case_name, kwargs, expected_dims
-):
-    cube = local_conn.load_stac(**kwargs)
-    arr = cube.execute()
+def test_load_stac_dimension_names_and_order(case_name, kwargs, expected_dims):
+    cube = load_stac(**kwargs)
 
-    # xarray DataArray: dims is a tuple in order
-    assert tuple(arr.dims) == tuple(
+    dims = _cube_dims_in_order(cube)
+    assert dims == tuple(
         expected_dims
-    ), f"{case_name}: expected dims {expected_dims}, got {arr.dims}"
+    ), f"{case_name}: expected dims {expected_dims}, got {dims}"
