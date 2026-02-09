@@ -47,17 +47,17 @@ def resolve_dimension_names(
     "stac_path, expected_dims, must_have_cube_dims",
     [
         (
-            "/home/sdhinakaran/test_3/openeo-processes-dask/tests/data/stac/s2_sample_dimension_policy_case_1.json",
+            "./tests/data/stac/s2_sample_dimension_policy_case_1.json",
             {"t", "bands", "y", "x"},
             False,
         ),
         (
-            "/home/sdhinakaran/test_3/openeo-processes-dask/tests/data/stac/s2_sample_dimension_policy_case_2.json",
+            "./tests/data/stac/s2_sample_dimension_policy_case_2.json",
             {"t", "bands", "y", "x"},
             False,
         ),
         (
-            "/home/sdhinakaran/test_3/openeo-processes-dask/tests/data/stac/s2_sample_dimension_policy_case_3.json",
+            "./tests/data/stac/s2_sample_dimension_policy_case_3.json",
             {"time", "band", "y", "x"},
             True,
         ),
