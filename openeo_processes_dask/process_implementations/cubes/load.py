@@ -682,7 +682,7 @@ def load_stac(
         f"Extracted dimension names: x={target_x}, y={target_y}, t={target_t}, bands={target_b}"
     )
 
-    # NEW: Apply band name case normalization if needed
+    # Apply band name case normalization if needed
     if bands and band_case_map:
         bands = _normalize_band_names(bands, band_case_map)
 
