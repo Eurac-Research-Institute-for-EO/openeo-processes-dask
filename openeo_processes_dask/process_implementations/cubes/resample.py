@@ -132,34 +132,49 @@ def resample_spatial(
     dim_order = data.dims
     data_cp = data.transpose(..., data.openeo.y_dim, data.openeo.x_dim)
 
-    # using xcube if method == "geocode" --> xcube-based "geocode"
     if method == "geocode":
+        # Require resolution for geocode method
+        if resolution == 0:
+            raise OpenEOException(
+                'method="geocode" requires a non-zero resolution parameter. '
+                "Please specify the output resolution in the target CRS units."
+            )
+
+        # If projection not specified, default to EPSG:4326
+        if projection is None:
+            projection = 4326
+            logger.info(
+                'method="geocode": projection not specified, defaulting to EPSG:4326'
+            )
+
         try:
+            from xcube_resampling.gridmapping import GridMapping
             from xcube_resampling.rectify import rectify_dataset
             from xcube_resampling.spatial import resample_in_space
         except Exception as e:
             raise OpenEOException(
-                'method="geocode" requires the optional dependency "xcube-resampling" '
-                "to be installed."
+                'method="geocode" requires the optional dependency "xcube-resampling" to be installed.'
             ) from e
 
         y_dim = data.openeo.y_dim
         x_dim = data.openeo.x_dim
         band_dim = getattr(data.openeo, "band_dim", None) or "bands"
 
-        def _bands_da_to_vars_ds(
-            da: xr.DataArray, band_dim_: str = "bands"
-        ) -> xr.Dataset:
-            """
-            Convert DataArray with a bands dimension into Dataset with one data_var per band label.
-            Examples:
-              da(bands,y,x) with bands=['chl_nn'] -> ds with var 'chl_nn'(y,x)
-              da(time,bands,y,x)                 -> ds with vars '...' (time,y,x)
-            """
-            # If there is no bands dim, fall back to a single-var dataset
+        def _find_lon_lat_vars(ds: xr.Dataset) -> tuple[str, str]:
+            candidates = [("lon", "lat"), ("longitude", "latitude")]
+            for lon_name, lat_name in candidates:
+                lon_ok = lon_name in ds.coords or lon_name in ds.data_vars
+                lat_ok = lat_name in ds.coords or lat_name in ds.data_vars
+                if lon_ok and lat_ok:
+                    return lon_name, lat_name
+            raise OpenEOException(
+                'method="geocode" requires lon/lat layers present as variables or coordinates '
+                "(expected names: lon/lat or longitude/latitude)."
+            )
+
+        def _bands_da_to_vars_ds(da: xr.DataArray, band_dim_: str) -> xr.Dataset:
             if band_dim_ not in da.dims:
-                name = da.name or "data"
-                return da.to_dataset(name=name)
+                return da.to_dataset(name=(da.name or "data"))
 
             if band_dim_ not in da.coords:
                 raise OpenEOException(
@@ -167,33 +182,189 @@ def resample_spatial(
                 )
 
             labels = [str(v) for v in da[band_dim_].values.tolist()]
-
-            vars_dict = {}
+            vars_dict: dict[str, xr.DataArray] = {}
             for lbl in labels:
-                # .sel keeps all remaining dims, drops only the selected band coordinate
-                band_slice = da.sel({band_dim_: lbl}).drop_vars(
+                vars_dict[lbl] = da.sel({band_dim_: lbl}).drop_vars(
                     band_dim_, errors="ignore"
                 )
-                vars_dict[lbl] = band_slice
 
-            # Keep all non-band coords (including time, lon/lat if present as coords)
             coords = {k: v for k, v in da.coords.items() if k != band_dim_}
             ds = xr.Dataset(vars_dict, coords=coords)
-
-            # Preserve attrs at dataset level for convenience
             ds.attrs.update(getattr(da, "attrs", {}))
             return ds
+
+        def _coerce_lonlat_to_coords_and_normalize(
+            ds: xr.Dataset, lon_name: str, lat_name: str
+        ) -> xr.Dataset:
+            """
+            Make sure lon/lat are coords and normalize names to 'longitude'/'latitude'.
+            Ensures there are no duplicate lon/lat vars lingering in data_vars.
+            """
+            # move to coords if they are variables
+            if lon_name in ds.data_vars:
+                ds = ds.set_coords(lon_name)
+            if lat_name in ds.data_vars:
+                ds = ds.set_coords(lat_name)
+
+            # normalize naming
+            rename = {}
+            if lon_name == "lon":
+                rename["lon"] = "longitude"
+            if lat_name == "lat":
+                rename["lat"] = "latitude"
+            if rename:
+                ds = ds.rename(rename)
+
+            return ds
+
+        def _extract_lonlat_and_payload(
+            obj: xr.DataArray | xr.Dataset,
+            y_dim_: str,
+            x_dim_: str,
+            band_dim_: str,
+        ) -> tuple[xr.Dataset, xr.DataArray, xr.DataArray, list[str], bool]:
+            """
+            Return payload_ds (ONLY payload vars), lon2d/lat2d as coords, payload_vars, input_was_dataarray.
+            Supports:
+              - Dataset with lon/lat or longitude/latitude as coords/vars
+              - DataArray with lon/lat or longitude/latitude as coords/vars
+              - DataArray where lon/lat or longitude/latitude are stored as bands
+            """
+            is_da = isinstance(obj, xr.DataArray)
+
+            if is_da:
+                da = obj
+
+                # Case: lon/lat stored as band labels (your combined.nc case)
+                if band_dim_ in da.dims and band_dim_ in da.coords:
+                    band_labels = [str(b) for b in da[band_dim_].values.tolist()]
+                    band_set = set(band_labels)
+
+                    lat_band = (
+                        "latitude"
+                        if "latitude" in band_set
+                        else ("lat" if "lat" in band_set else None)
+                    )
+                    lon_band = (
+                        "longitude"
+                        if "longitude" in band_set
+                        else ("lon" if "lon" in band_set else None)
+                    )
+
+                    if lat_band and lon_band:
+                        lat2d = da.sel({band_dim_: lat_band}).drop_vars(
+                            band_dim_, errors="ignore"
+                        )
+                        lon2d = da.sel({band_dim_: lon_band}).drop_vars(
+                            band_dim_, errors="ignore"
+                        )
+
+                        payload_band_labels = [
+                            b for b in band_labels if b not in (lat_band, lon_band)
+                        ]
+                        if not payload_band_labels:
+                            raise OpenEOException(
+                                'method="geocode": bands contained only lon/lat; no payload bands to rectify.'
+                            )
+
+                        da_payload = da.sel({band_dim_: payload_band_labels})
+                        payload_ds = _bands_da_to_vars_ds(
+                            da_payload, band_dim_=band_dim_
+                        )
+
+                        # attach as coords under canonical names
+                        payload_ds = payload_ds.assign_coords(
+                            {"longitude": lon2d, "latitude": lat2d}
+                        )
+                        payload_ds = payload_ds.set_coords(["longitude", "latitude"])
+
+                        payload_vars = list(payload_ds.data_vars)
+                        return (
+                            payload_ds,
+                            payload_ds["longitude"],
+                            payload_ds["latitude"],
+                            payload_vars,
+                            True,
+                        )
+
+                # General DataArray case: convert to dataset, then find lon/lat
+                ds_full = (
+                    _bands_da_to_vars_ds(da, band_dim_=band_dim_)
+                    if band_dim_ in da.dims
+                    else da.to_dataset(name=(da.name or "data"))
+                )
+                lon_name, lat_name = _find_lon_lat_vars(ds_full)
+                ds_full = _coerce_lonlat_to_coords_and_normalize(
+                    ds_full, lon_name, lat_name
+                )
+
+                # payload vars exclude lon/lat + spatial_ref
+                payload_vars = [
+                    v
+                    for v in ds_full.data_vars
+                    if v not in ("longitude", "latitude", "spatial_ref")
+                ]
+                if not payload_vars:
+                    raise OpenEOException(
+                        'method="geocode": no payload variables found (only lon/lat present?).'
+                    )
+
+                payload_ds = ds_full[payload_vars].assign_coords(
+                    {"longitude": ds_full["longitude"], "latitude": ds_full["latitude"]}
+                )
+                payload_ds = payload_ds.set_coords(["longitude", "latitude"])
+                return (
+                    payload_ds,
+                    payload_ds["longitude"],
+                    payload_ds["latitude"],
+                    payload_vars,
+                    True,
+                )
+
+            # Dataset case
+            ds_full = obj
+            lon_name, lat_name = _find_lon_lat_vars(ds_full)
+            ds_full = _coerce_lonlat_to_coords_and_normalize(
+                ds_full, lon_name, lat_name
+            )
+
+            payload_vars = [
+                v
+                for v in ds_full.data_vars
+                if v not in ("longitude", "latitude", "spatial_ref")
+            ]
+            if not payload_vars:
+                raise OpenEOException(
+                    'method="geocode": no payload variables found (only lon/lat present?).'
+                )
+
+            payload_ds = ds_full[payload_vars].assign_coords(
+                {"longitude": ds_full["longitude"], "latitude": ds_full["latitude"]}
+            )
+            payload_ds = payload_ds.set_coords(["longitude", "latitude"])
+            return (
+                payload_ds,
+                payload_ds["longitude"],
+                payload_ds["latitude"],
+                payload_vars,
+                False,
+            )
+
+        def _default_interp_methods_from_dtypes(ds: xr.Dataset) -> dict[str, str]:
+            methods: dict[str, str] = {}
+            for var_name, da in ds.data_vars.items():
+                if np.issubdtype(da.dtype, np.integer) or np.issubdtype(
+                    da.dtype, np.bool_
+                ):
+                    methods[var_name] = "nearest"
+                else:
+                    methods[var_name] = "bilinear"
+            return methods
 
         def _stack_extra_dims_for_xcube(
             ds: xr.Dataset, vars_: list[str]
         ) -> tuple[xr.Dataset, bool, list[str]]:
-            """
-            Ensure xcube sees at most one non-spatial dim before (y,x).
-            If vars have >1 extra dims (e.g. time,bands,y,x), stack all extra dims into '__plane__'.
-            Returns (new_ds, stacked?, extra_dims)
-            """
             plane_dim_ = "__plane__"
-            # Determine extra dims from the first variable (assume consistent for payload)
             v0 = vars_[0]
             extra = [d for d in ds[v0].dims if d not in (y_dim, x_dim)]
             stacked_ = False
@@ -209,7 +380,6 @@ def resample_spatial(
                     ds[v] = ds[v].transpose(extra[0], y_dim, x_dim)
                 return ds, False, extra
 
-            # len(extra) > 1 -> stack
             stacked_ = True
             stacked_vars = {}
             for v in vars_:
@@ -221,73 +391,138 @@ def resample_spatial(
         def _unstack_after_xcube(
             da: xr.DataArray, extra_dims: list[str]
         ) -> xr.DataArray:
-            """
-            Unstack '__plane__' back to original extra dims order.
-            """
             plane_dim_ = "__plane__"
             if plane_dim_ in da.dims:
                 da = da.unstack(plane_dim_)
-                # Restore extra dims order explicitly (xarray may reorder)
                 da = da.transpose(*extra_dims, y_dim, x_dim)
             return da
 
-        # build source_ds
-        is_dataarray = isinstance(data_cp, xr.DataArray)
+        def _force_xcube_use_2d_xy(
+            source_payload: xr.Dataset, y_dim_: str, x_dim_: str
+        ) -> xr.Dataset:
+            """
+            Critical: avoid xcube preferring 1D x(x)/y(y) index coords.
+            Provide 2D x(y,x), y(y,x) from lon/lat.
+            """
+            lon2d_ = source_payload.coords.get("longitude")
+            lat2d_ = source_payload.coords.get("latitude")
+            if lon2d_ is None or lat2d_ is None:
+                raise OpenEOException(
+                    'method="geocode": missing longitude/latitude coords.'
+                )
 
-        if is_dataarray:
-            # Convert bands->vars so payload isn't hidden inside a 'bands' dimension
-            source_ds = _bands_da_to_vars_ds(data_cp, band_dim_=band_dim)
-        else:
-            source_ds = data_cp
+            if lon2d_.dims != (y_dim_, x_dim_) or lat2d_.dims != (y_dim_, x_dim_):
+                raise OpenEOException(
+                    f'method="geocode": longitude/latitude must have dims ({y_dim_},{x_dim_}); got {lon2d_.dims} and {lat2d_.dims}.'
+                )
 
-        # find lon/lat
-        lon_name, lat_name = _find_lon_lat_vars(source_ds)
-        lon2d = source_ds[lon_name]
-        lat2d = source_ds[lat_name]
+            # drop 1D index coords if present
+            drop_names = []
+            if "x" in source_payload.coords and source_payload["x"].dims == (x_dim_,):
+                drop_names.append("x")
+            if "y" in source_payload.coords and source_payload["y"].dims == (y_dim_,):
+                drop_names.append("y")
+            if drop_names:
+                source_payload = source_payload.drop_vars(drop_names)
+
+            # assign 2D x/y coords for xcube GridMapping detection
+            return source_payload.assign_coords(
+                {
+                    "x": lon2d_.astype(np.float64),
+                    "y": lat2d_.astype(np.float64),
+                }
+            )
+
+        def _build_target_gm_from_lonlat_bbox(
+            lon2d_: xr.DataArray,
+            lat2d_: xr.DataArray,
+            target_crs_: CRS,
+            resolution_: float,
+            tile_size: int = 1024,
+        ) -> GridMapping:
+            west = float(lon2d_.min().compute())
+            east = float(lon2d_.max().compute())
+            south = float(lat2d_.min().compute())
+            north = float(lat2d_.max().compute())
+
+            src_crs = CRS.from_epsg(4326)
+            if not target_crs_.equals(src_crs) and not (
+                target_crs_.is_geographic and src_crs.is_geographic
+            ):
+                transformer = Transformer.from_crs(src_crs, target_crs_, always_xy=True)
+                west, south, east, north = transformer.transform_bounds(
+                    west, south, east, north
+                )
+
+            return GridMapping.regular_from_bbox(
+                bbox=(west, south, east, north),
+                xy_res=resolution_,
+                crs=target_crs_,
+                tile_size=tile_size,
+                is_j_axis_up=False,
+            )
+
+        def _rename_output_spatial_dims_to_cube(
+            ds_or_da: xr.Dataset | xr.DataArray,
+        ) -> xr.Dataset | xr.DataArray:
+            """
+            xcube often outputs dims named ('lat','lon') or ('latitude','longitude').
+            Rename them back to the cube's y_dim/x_dim so transpose(*dim_order) works.
+            """
+            rename = {}
+            if "lat" in ds_or_da.dims and y_dim not in ds_or_da.dims:
+                rename["lat"] = y_dim
+            if "lon" in ds_or_da.dims and x_dim not in ds_or_da.dims:
+                rename["lon"] = x_dim
+            if "latitude" in ds_or_da.dims and y_dim not in ds_or_da.dims:
+                rename["latitude"] = y_dim
+            if "longitude" in ds_or_da.dims and x_dim not in ds_or_da.dims:
+                rename["longitude"] = x_dim
+            return ds_or_da.rename(rename) if rename else ds_or_da
+
+        dim_order = data.dims
+        data_cp = data.transpose(..., y_dim, x_dim)
+
+        (
+            payload_ds,
+            lon2d,
+            lat2d,
+            payload_vars,
+            input_was_dataarray,
+        ) = _extract_lonlat_and_payload(
+            data_cp, y_dim_=y_dim, x_dim_=x_dim, band_dim_=band_dim
+        )
+
+        # Make absolutely sure lon/lat are coords only and NOT data_vars
+        payload_ds = payload_ds.set_coords(["longitude", "latitude"])
+        payload_ds = payload_ds[payload_vars]  # enforce payload-only variables
+        payload_ds = payload_ds.assign_coords({"longitude": lon2d, "latitude": lat2d})
 
         if lon2d.ndim != 2 or lat2d.ndim != 2:
             raise OpenEOException(
-                f'For method="geocode", {lon_name!r} and {lat_name!r} must be 2D arrays '
-                f"aligned to the spatial grid (got shapes {lon2d.shape} and {lat2d.shape})."
+                f'method="geocode" requires 2D lon/lat aligned with (y,x); got shapes {lon2d.shape} and {lat2d.shape}.'
             )
 
-        # force lon/lat to be coords (safest for GridMapping inference)
-        source_ds = source_ds.assign_coords({lon_name: lon2d, lat_name: lat2d})
+        interp_methods = _default_interp_methods_from_dtypes(payload_ds)
 
-        # payload variables
-        payload_vars = list(source_ds.data_vars)
-
-        # remove lon/lat/spatial_ref if they are data_vars in some inputs
-        payload_vars = [
-            v for v in payload_vars if v not in (lon_name, lat_name, "spatial_ref")
-        ]
-        if not payload_vars:
-            raise OpenEOException(
-                'method="geocode": no payload variables found to rectify (only lon/lat present?).'
-            )
-
-        # Default per-variable interpolation (flags -> nearest, floats -> bilinear)
-        interp_methods = _default_interp_methods_from_dtypes(source_ds[payload_vars])
-
-        # Ensure xcube can handle dimensionality: stack if needed
-        source_payload = source_ds[payload_vars]
-        source_payload, stacked, extra_dims = _stack_extra_dims_for_xcube(
-            source_payload, payload_vars
+        # dim prep for xcube
+        payload_ds2, stacked, extra_dims = _stack_extra_dims_for_xcube(
+            payload_ds, payload_vars
         )
 
-        # Decide default vs explicit target grid
+        # critical fix: enforce 2D x/y coords
+        payload_ds2 = _force_xcube_use_2d_xy(payload_ds2, y_dim_=y_dim, x_dim_=x_dim)
+
         user_passed_projection = projection is not None
         user_passed_resolution = resolution not in (0, None)
 
         if not user_passed_projection and not user_passed_resolution:
-            # Default xcube behavior: derive regular grid from source GM internally (to_regular)
             out_ds = rectify_dataset(
-                source_payload,
+                payload_ds2,
                 interp_methods=interp_methods,
                 tile_size=1024,
             )
         else:
-            # Explicit grid mode: projection/resolution define the output grid
             if projection is None:
                 target_crs = CRS.from_epsg(4326)
             else:
@@ -300,68 +535,51 @@ def resample_spatial(
 
             if not user_passed_resolution:
                 raise OpenEOException(
-                    'method="geocode": if "projection" is provided explicitly, you must also '
-                    'provide a non-zero "resolution" so an explicit target grid can be built.'
+                    'method="geocode": if "projection" is provided explicitly, you must also provide a non-zero "resolution".'
                 )
 
             target_gm = _build_target_gm_from_lonlat_bbox(
-                lon2d=lon2d,
-                lat2d=lat2d,
-                target_crs=target_crs,
-                resolution=float(resolution),
+                lon2d_=lon2d,
+                lat2d_=lat2d,
+                target_crs_=target_crs,
+                resolution_=float(resolution),
                 tile_size=1024,
             )
 
-            # resample_in_space will pick rectification (irregular -> regular) automatically
             out_ds = resample_in_space(
-                source_payload,
+                payload_ds2,
                 target_gm=target_gm,
                 interp_methods=interp_methods,
             )
 
-        # convert output back
-        if is_dataarray:
-            # Convert vars back into a banded DataArray, preserving time/etc.
+        # Unstack back if needed
+        if stacked:
+            fixed = {}
+            for v in [v for v in out_ds.data_vars if v != "spatial_ref"]:
+                fixed[v] = _unstack_after_xcube(out_ds[v], extra_dims)
+            out_ds = out_ds.assign(fixed)
+
+        # Convert back to original type/shape + fix output dims names
+        if input_was_dataarray:
             out_vars = [v for v in out_ds.data_vars if v != "spatial_ref"]
             if not out_vars:
                 raise OpenEOException(
-                    'method="geocode": rectification produced no output variables (only spatial_ref).'
+                    'method="geocode": no output variables produced (only spatial_ref).'
                 )
 
-            out_bands = []
-            for v in out_vars:
-                da_v = out_ds[v]
-                if stacked:
-                    da_v = _unstack_after_xcube(da_v, extra_dims)
-                out_bands.append(da_v)
+            out = xr.concat([out_ds[v] for v in out_vars], dim=band_dim).assign_coords(
+                {band_dim: out_vars}
+            )
 
-            out = xr.concat(out_bands, dim=band_dim)
-            out = out.assign_coords({band_dim: out_vars})
-
-            rename_dims = {}
-            if "lat" in out.dims and y_dim not in out.dims:
-                rename_dims["lat"] = y_dim
-            if "lon" in out.dims and x_dim not in out.dims:
-                rename_dims["lon"] = x_dim
-            if "latitude" in out.dims and y_dim not in out.dims:
-                rename_dims["latitude"] = y_dim
-            if "longitude" in out.dims and x_dim not in out.dims:
-                rename_dims["longitude"] = x_dim
-            if rename_dims:
-                out = out.rename(rename_dims)
+            # <<< FIX: rename lat/lon dims to y/x before transpose >>>
+            out = _rename_output_spatial_dims_to_cube(out)
 
             out = out.transpose(*dim_order, missing_dims="ignore")
-
         else:
-            # dataset input: just unstack variables if needed and restore dim order
-            if stacked:
-                fixed = {}
-                for v in [v for v in out_ds.data_vars if v != "spatial_ref"]:
-                    fixed[v] = _unstack_after_xcube(out_ds[v], extra_dims)
-                out_ds = out_ds.assign(fixed)
+            out_ds = _rename_output_spatial_dims_to_cube(out_ds)
             out = out_ds.transpose(*dim_order, missing_dims="ignore")
 
-        # preserve original attrs (except CRS handled elsewhere)
+        # Preserve attrs (except CRS handled elsewhere)
         for k, v in data.attrs.items():
             if k.lower() != "crs":
                 out.attrs[k] = v
