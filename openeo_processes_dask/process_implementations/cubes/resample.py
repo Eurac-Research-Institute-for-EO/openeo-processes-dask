@@ -160,18 +160,6 @@ def resample_spatial(
         x_dim = data.openeo.x_dim
         band_dim = getattr(data.openeo, "band_dim", None) or "bands"
 
-        def _find_lon_lat_vars(ds: xr.Dataset) -> tuple[str, str]:
-            candidates = [("lon", "lat"), ("longitude", "latitude")]
-            for lon_name, lat_name in candidates:
-                lon_ok = lon_name in ds.coords or lon_name in ds.data_vars
-                lat_ok = lat_name in ds.coords or lat_name in ds.data_vars
-                if lon_ok and lat_ok:
-                    return lon_name, lat_name
-            raise OpenEOException(
-                'method="geocode" requires lon/lat layers present as variables or coordinates '
-                "(expected names: lon/lat or longitude/latitude)."
-            )
-
         def _bands_da_to_vars_ds(da: xr.DataArray, band_dim_: str) -> xr.Dataset:
             if band_dim_ not in da.dims:
                 return da.to_dataset(name=(da.name or "data"))
@@ -350,17 +338,6 @@ def resample_spatial(
                 False,
             )
 
-        def _default_interp_methods_from_dtypes(ds: xr.Dataset) -> dict[str, str]:
-            methods: dict[str, str] = {}
-            for var_name, da in ds.data_vars.items():
-                if np.issubdtype(da.dtype, np.integer) or np.issubdtype(
-                    da.dtype, np.bool_
-                ):
-                    methods[var_name] = "nearest"
-                else:
-                    methods[var_name] = "bilinear"
-            return methods
-
         def _stack_extra_dims_for_xcube(
             ds: xr.Dataset, vars_: list[str]
         ) -> tuple[xr.Dataset, bool, list[str]]:
@@ -431,35 +408,6 @@ def resample_spatial(
                     "x": lon2d_.astype(np.float64),
                     "y": lat2d_.astype(np.float64),
                 }
-            )
-
-        def _build_target_gm_from_lonlat_bbox(
-            lon2d_: xr.DataArray,
-            lat2d_: xr.DataArray,
-            target_crs_: CRS,
-            resolution_: float,
-            tile_size: int = 1024,
-        ) -> GridMapping:
-            west = float(lon2d_.min().compute())
-            east = float(lon2d_.max().compute())
-            south = float(lat2d_.min().compute())
-            north = float(lat2d_.max().compute())
-
-            src_crs = CRS.from_epsg(4326)
-            if not target_crs_.equals(src_crs) and not (
-                target_crs_.is_geographic and src_crs.is_geographic
-            ):
-                transformer = Transformer.from_crs(src_crs, target_crs_, always_xy=True)
-                west, south, east, north = transformer.transform_bounds(
-                    west, south, east, north
-                )
-
-            return GridMapping.regular_from_bbox(
-                bbox=(west, south, east, north),
-                xy_res=resolution_,
-                crs=target_crs_,
-                tile_size=tile_size,
-                is_j_axis_up=False,
             )
 
         def _rename_output_spatial_dims_to_cube(
@@ -539,10 +487,10 @@ def resample_spatial(
                 )
 
             target_gm = _build_target_gm_from_lonlat_bbox(
-                lon2d_=lon2d,
-                lat2d_=lat2d,
-                target_crs_=target_crs,
-                resolution_=float(resolution),
+                lon2d=lon2d,
+                lat2d=lat2d,
+                target_crs=target_crs,
+                resolution=float(resolution),
                 tile_size=1024,
             )
 
