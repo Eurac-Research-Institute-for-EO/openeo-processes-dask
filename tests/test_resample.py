@@ -201,14 +201,10 @@ def test_aggregate_temporal_period(
 
 @pytest.mark.parametrize("size", [(30, 30, 5, 4)])
 @pytest.mark.parametrize("dtype", [np.float32])
-def test_resample_spatial_geocode_curvilinear(
-    temporal_interval,
-    bounding_box,
-    random_raster_data,
+def test_resample_spatial_geocode_requires_resolution(
+    temporal_interval, bounding_box, random_raster_data
 ):
-    """Ensure method='geocode' can rectify a curvilinear grid to a regular grid."""
     pytest.importorskip("xcube_resampling")
-
     input_cube = create_fake_curvilinear_rastercube(
         data=random_raster_data,
         spatial_extent=bounding_box,
@@ -216,20 +212,8 @@ def test_resample_spatial_geocode_curvilinear(
         bands=["B02", "B03", "B04", "B08"],
         backend="dask",
     )
-
-    # Default behavior: derive a regular grid internally from lon/lat.
-    output_cube = resample_spatial(data=input_cube, method="geocode")
-
-    dx = np.diff(output_cube["x"].values)
-    dy = np.diff(output_cube["y"].values)
-
-    assert output_cube.odc.spatial_dims == ("y", "x")
-    assert output_cube["x"].ndim == 1
-    assert output_cube["y"].ndim == 1
-    assert np.all(dx != 0)
-    assert np.all(dy != 0)
-    assert np.all(dx > 0) or np.all(dx < 0)
-    assert np.all(dy > 0) or np.all(dy < 0)
+    with pytest.raises(Exception):
+        resample_spatial(data=input_cube, method="geocode")
 
 
 @pytest.mark.parametrize("size", [(30, 30, 5, 4)])
@@ -258,6 +242,13 @@ def test_resample_spatial_geocode_curvilinear_explicit_grid(
         method="geocode",
     )
 
+    dx = np.diff(output_cube["x"].values)
+    dy = np.diff(output_cube["y"].values)
+
     assert output_cube.odc.spatial_dims == ("y", "x")
     assert output_cube["x"].ndim == 1
     assert output_cube["y"].ndim == 1
+    assert np.all(dx != 0)
+    assert np.all(dy != 0)
+    assert np.all(dx > 0) or np.all(dx < 0)
+    assert np.all(dy > 0) or np.all(dy < 0)
