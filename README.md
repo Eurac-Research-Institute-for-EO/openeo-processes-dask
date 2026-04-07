@@ -76,6 +76,11 @@ A subset of process implementations with heavy or unstable dependencies are hidd
   pip install openeo-processes-dask[experimental]
   ```
 
+* **Export processes (Zarr + STAC): specific to save_result implementation PoC**
+
+  ```bash
+  pip install openeo-processes-dask[export]
+
 ⚠️ **Note on GDAL:**
 Some extras (e.g. `implementations`, `ml`, `experimental`) may trigger installation of packages that depend on GDAL.
 To avoid version conflicts, make sure you have installed GDAL first (via conda/micromamba or system packages) and then install the extras as shown above.
@@ -89,7 +94,7 @@ openeo-processes-dask requires poetry >1.2, see their [docs](https://python-poet
 Clone the repository with `--recurse-submodules` to also fetch the process specs:
 
 ```bash
-git clone --recurse-submodules git@github.com:Open-EO/openeo-processes-dask.git
+git clone --recurse-submodules git@github.com:Eurac-Research-Institute-for-EO/openeo-processes-dask.git
 ```
 
 To setup the python venv and install this project into it run:

@@ -23,6 +23,14 @@ try:
 except ImportError as e:
     logger.warning("Did not load experimental processes.")
 
+try:
+    from .export import *
+except ImportError:
+    logger.warning(
+        "Did not load export processes due to missing dependencies: "
+        "Install them like this: `pip install openeo-processes-dask[implementations, export]`"
+    )
+
 import rioxarray as rio  # Required for the .rio accessor on xarrays.
 
 import openeo_processes_dask.process_implementations.cubes._xr_interop
