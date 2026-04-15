@@ -67,6 +67,7 @@ pytest-cov = "^4.0.0"
 [tool.poetry.extras]
 implementations = ["geopandas", "xarray", "dask", "rasterio", "dask-geopandas", "rioxarray", "openeo-pg-parser-networkx", "odc-geo", "odc-stac", "planetary_computer", "pystac_client", "stac_validator", "xvec", "joblib"]
 ml = ["xgboost"]
+export = ["raster2stac"]
 
 [tool.pytest.ini_options]
 testpaths = [
