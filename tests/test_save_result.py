@@ -12,7 +12,6 @@ from openeo_processes_dask.process_implementations.export.save_result import (
     save_result,
 )
 
-
 def _make_test_cube() -> xr.DataArray:
     """
     Build a minimal RasterCube-compatible xarray.DataArray.
@@ -203,8 +202,11 @@ def test_save_result_netcdf_returns_collection_when_available(tmp_path: Path):
     assert metadata["type"] == "Collection"
     assert metadata["id"] == "test-netcdf-result"
 
-    assert result["type"] == "Collection"
-    assert result["id"] == "test-netcdf-result"
+    # save_result now returns {"collection": ..., "items": ...}
+    assert set(result.keys()) == {"collection", "items"}
+    assert result["collection"]["type"] == "Collection"
+    assert result["collection"]["id"] == "test-netcdf-result"
+    assert isinstance(result["items"], dict)
 
 
 def test_save_result_netcdf_is_case_insensitive(tmp_path: Path):
@@ -234,8 +236,9 @@ def test_save_result_netcdf_is_case_insensitive(tmp_path: Path):
     assert (
         collection_json.exists()
     ), f"Expected {collection_json}; found: {list(output_folder.iterdir())}"
-    assert result["type"] == "Collection"
-    assert result["id"] == "test-netcdf-case"
+
+    assert result["collection"]["type"] == "Collection"
+    assert result["collection"]["id"] == "test-netcdf-case"
 
 
 def test_save_result_zarr_returns_collection_when_available(tmp_path: Path):
@@ -246,11 +249,12 @@ def test_save_result_zarr_returns_collection_when_available(tmp_path: Path):
     except ImportError:
         pytest.skip("raster2stac not installed; cannot test zarr export path.")
 
+    output_path = tmp_path / "zarr_result"
     result = save_result(
         cube,
         format="zarr",
         options={
-            "path": str(tmp_path / "zarr_result"),
+            "path": str(output_path),
             "collection_id": "test-zarr-result",
             "item_id": "test-zarr-item",
             "collection_url": "https://stac.openeo.eurac.edu/api/v1/pgstac/collections/",
@@ -260,16 +264,23 @@ def test_save_result_zarr_returns_collection_when_available(tmp_path: Path):
         },
     )
 
+    assert output_path.exists(), f"Expected {output_path} to exist."
+    assert not (tmp_path / "zarr_result.zarr").exists(), (
+        "Path should not have been rewritten with a .zarr suffix."
+    )
+
     # raster2stac writes {collection_id}.json, not metadata.json.
-    output_folder = tmp_path / "zarr_result.zarr"
-    collection_json = output_folder / "test-zarr-result.json"
+    collection_json = output_path / "test-zarr-result.json"
     assert (
         collection_json.exists()
-    ), f"Expected {collection_json}; found: {list(output_folder.iterdir())}"
+    ), f"Expected {collection_json}; found: {list(output_path.iterdir())}"
 
     metadata = json.loads(collection_json.read_text())
     assert metadata["type"] == "Collection"
     assert metadata["id"] == "test-zarr-result"
 
-    assert result["type"] == "Collection"
-    assert result["id"] == "test-zarr-result"
+    # save_result now returns {"collection": ..., "items": ...}
+    assert set(result.keys()) == {"collection", "items"}
+    assert result["collection"]["type"] == "Collection"
+    assert result["collection"]["id"] == "test-zarr-result"
+    assert isinstance(result["items"], dict)

@@ -130,12 +130,13 @@ def _build_raster2stac(
     )
 
 
-def _read_generated_collection(
+def _read_collection_dict(
     output_folder: Path, collection_id: str
 ) -> dict[str, Any]:
     """
-    raster2stac writes the collection metadata to metadata.json in output_folder.
-    If that is unavailable, try a collection-id-based fallback.
+    raster2stac writes the collection metadata to metadata.json or
+    {collection_id}.json in output_folder. Return whichever is found; fall
+    back to a minimal stub otherwise.
     """
     metadata_path = output_folder / "metadata.json"
     if metadata_path.exists():
@@ -156,6 +157,49 @@ def _read_generated_collection(
     }
 
 
+def _read_items_dict(output_folder: Path) -> dict[str, dict[str, Any]]:
+    """
+    raster2stac writes STAC items under output_folder/items/*.json. Load all
+    of them and return a dict keyed by the item's `id` field (falling back to
+    the file stem when `id` is missing).
+    """
+    items_dir = output_folder / "items"
+    items: dict[str, dict[str, Any]] = {}
+
+    if not items_dir.is_dir():
+        return items
+
+    for item_path in sorted(items_dir.glob("*.json")):
+        try:
+            with open(item_path) as f:
+                item = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            logger.warning(
+                "Could not read STAC item at %s; skipping.", item_path, exc_info=True
+            )
+            continue
+
+        key = item.get("id") or item_path.stem
+        items[key] = item
+
+    return items
+
+
+def _read_generated_outputs(
+    output_folder: Path, collection_id: str
+) -> dict[str, Any]:
+    """
+    Return both the generated collection dict and the items dict, so callers
+    get a complete picture of what raster2stac produced.
+    """
+    return {
+        "collection": _read_collection_dict(
+            output_folder=output_folder, collection_id=collection_id
+        ),
+        "items": _read_items_dict(output_folder=output_folder),
+    }
+
+
 def _export_netcdf_with_stac(
     ds: xr.Dataset,
     output_folder: Path,
@@ -171,7 +215,7 @@ def _export_netcdf_with_stac(
     rs2stac.generate_netcdf_stac()
 
     collection_id = options.get("collection_id", output_folder.name)
-    return _read_generated_collection(
+    return _read_generated_outputs(
         output_folder=output_folder, collection_id=collection_id
     )
 
@@ -194,7 +238,7 @@ def _export_zarr_with_stac(
 
     rs2stac.generate_zarr_stac(item_id=item_id)
 
-    return _read_generated_collection(
+    return _read_generated_outputs(
         output_folder=output_folder, collection_id=collection_id
     )
 
@@ -205,12 +249,17 @@ def save_result(
     options: Optional[dict[str, Any]] = None,
 ):
     """
-    Save processed data and return the generated STAC resource.
+    Save processed data and return the generated STAC resources.
 
     Current prototype conventions:
     - options["path"] is required
     - options["collection_url"] is required for raster2stac
     - supported formats: netcdf, nc, zarr
+
+    Returns
+    -------
+    dict
+        ``{"collection": <collection_dict>, "items": {<id>: <item_dict>, ...}}``
     """
     options = options or {}
     fmt = _normalize_format(format)
@@ -236,8 +285,8 @@ def save_result(
 
     if fmt == "zarr":
         output_folder = Path(output_path).resolve()
-        if output_folder.suffix != ".zarr":
-            output_folder = Path(f"{output_folder}.zarr")
+        #if output_folder.suffix != ".zarr":
+        #    output_folder = Path(f"{output_folder}.zarr")
         return _export_zarr_with_stac(
             ds=ds, output_folder=output_folder, options=options
         )
