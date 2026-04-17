@@ -130,9 +130,7 @@ def _build_raster2stac(
     )
 
 
-def _read_collection_dict(
-    output_folder: Path, collection_id: str
-) -> dict[str, Any]:
+def _read_collection_dict(output_folder: Path, collection_id: str) -> dict[str, Any]:
     """
     raster2stac writes the collection metadata to metadata.json or
     {collection_id}.json in output_folder. Return whichever is found; fall
@@ -185,9 +183,7 @@ def _read_items_dict(output_folder: Path) -> dict[str, dict[str, Any]]:
     return items
 
 
-def _read_generated_outputs(
-    output_folder: Path, collection_id: str
-) -> dict[str, Any]:
+def _read_generated_outputs(output_folder: Path, collection_id: str) -> dict[str, Any]:
     """
     Return both the generated collection dict and the items dict, so callers
     get a complete picture of what raster2stac produced.
@@ -285,7 +281,7 @@ def save_result(
 
     if fmt == "zarr":
         output_folder = Path(output_path).resolve()
-        #if output_folder.suffix != ".zarr":
+        # if output_folder.suffix != ".zarr":
         #    output_folder = Path(f"{output_folder}.zarr")
         return _export_zarr_with_stac(
             ds=ds, output_folder=output_folder, options=options

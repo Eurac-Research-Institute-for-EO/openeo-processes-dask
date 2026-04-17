@@ -12,6 +12,7 @@ from openeo_processes_dask.process_implementations.export.save_result import (
     save_result,
 )
 
+
 def _make_test_cube() -> xr.DataArray:
     """
     Build a minimal RasterCube-compatible xarray.DataArray.
@@ -265,9 +266,9 @@ def test_save_result_zarr_returns_collection_when_available(tmp_path: Path):
     )
 
     assert output_path.exists(), f"Expected {output_path} to exist."
-    assert not (tmp_path / "zarr_result.zarr").exists(), (
-        "Path should not have been rewritten with a .zarr suffix."
-    )
+    assert not (
+        tmp_path / "zarr_result.zarr"
+    ).exists(), "Path should not have been rewritten with a .zarr suffix."
 
     # raster2stac writes {collection_id}.json, not metadata.json.
     collection_json = output_path / "test-zarr-result.json"
