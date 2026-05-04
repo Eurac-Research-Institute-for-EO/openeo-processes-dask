@@ -360,7 +360,7 @@ def _extract_asset_metadata(items, requested_bands=None):
     available_assets = set(band_assets_dict.keys())
 
     all_item_assets = [set(item.assets.keys()) for item in items]
-    if len(set(tuple(sorted(s)) for s in all_item_assets)) > 1:
+    if len({tuple(sorted(s)) for s in all_item_assets}) > 1:
         logger.warning(
             f"Items contain different asset sets. Using intersection of available band assets."
         )
