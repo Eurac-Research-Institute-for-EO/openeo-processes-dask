@@ -950,6 +950,9 @@ def load_stac(
             f"The provided URL is a STAC {asset_type}, which is not yet supported. Please provide a valid URL to a STAC Collection or Item."
         )
 
+    if not items:
+        raise NoDataAvailable("There is no data available for the given extents.")
+
     # Extract asset metadata
     (
         asset_scale_offset,
