@@ -293,9 +293,11 @@ def _get_band_assets_from_items(items, requested_bands=None):
 
             if requested_bands:
                 asset_bands = _get_asset_band_names(asset)
-                if not set(asset_bands).intersection(requested_bands):
+
+                if asset_bands and not set(asset_bands).intersection(requested_bands):
                     logger.debug(
-                        f"Skipping asset '{asset_key}' - doesn't contain requested bands"
+                        f"Skipping asset '{asset_key}' - declared bands {asset_bands} "
+                        f"don't overlap requested bands {requested_bands}"
                     )
                     continue
 

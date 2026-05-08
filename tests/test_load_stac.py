@@ -41,20 +41,23 @@ def test_load_stac(bounding_box, random_raster_data, temporal_interval):
         backend="dask",
     )
 
-    input_cube.to_dataset(dim="bands").to_zarr("./tests/data/s2_l2a_zarr_sample.zarr")
+    zarr_path = "./tests/data/s2_l2a_zarr_sample.zarr"
+    input_cube.to_dataset(dim="bands").to_zarr(zarr_path, mode="w")
 
-    url = "./tests/data/stac/s2_l2a_zarr_sample.json"
-    output_cube = load_stac(
-        url=url,
-        bands=["B04"],
-    )
+    try:
+        url = "./tests/data/stac/s2_l2a_zarr_sample.json"
+        output_cube = load_stac(
+            url=url,
+            bands=["B04"],
+        )
 
-    assert output_cube.openeo is not None
-    assert len(output_cube[output_cube.openeo.x_dim]) > 0
-    assert len(output_cube[output_cube.openeo.y_dim]) > 0
-    assert len(output_cube[output_cube.openeo.band_dims[0]]) > 0
-    assert len(output_cube[output_cube.openeo.temporal_dims[0]]) > 0
-    shutil.rmtree("./tests/data/s2_l2a_zarr_sample.zarr")
+        assert output_cube.openeo is not None
+        assert len(output_cube[output_cube.openeo.x_dim]) > 0
+        assert len(output_cube[output_cube.openeo.y_dim]) > 0
+        assert len(output_cube[output_cube.openeo.band_dims[0]]) > 0
+        assert len(output_cube[output_cube.openeo.temporal_dims[0]]) > 0
+    finally:
+        shutil.rmtree(zarr_path, ignore_errors=True)
 
 
 def test_load_url():
@@ -237,6 +240,44 @@ class TestMediaTypeValidation:
         assert "metadata" not in band_assets
         assert "thumbnail" not in band_assets
         assert len(band_assets) == 1
+
+    def test_get_band_assets_zarr_container_kept_when_bands_requested(self):
+        """Zarr/netCDF assets with no eo:bands metadata must NOT be filtered out
+        when specific bands are requested — they are multi-variable containers and
+        band selection happens downstream (xarray / odc-stac)."""
+        item = Mock(spec=pystac.Item)
+
+        zarr_asset = Mock(spec=pystac.Asset)
+        zarr_asset.media_type = "application/vnd+zarr"
+        zarr_asset.roles = ["data"]
+        zarr_asset.extra_fields = {}
+
+        item.assets = {"data": zarr_asset}
+
+        band_assets = _get_band_assets_from_items([item], requested_bands=["B04"])
+
+        assert "data" in band_assets, (
+            "Zarr container asset must be kept even when requested bands "
+            "are not listed in eo:bands (it has none)."
+        )
+
+    def test_get_band_assets_explicit_band_mismatch_is_filtered(self):
+        """An asset that explicitly declares its bands must be dropped when none
+        of those bands overlap with the requested bands."""
+        item = Mock(spec=pystac.Item)
+
+        asset_b01_b02 = Mock(spec=pystac.Asset)
+        asset_b01_b02.media_type = "image/tiff"
+        asset_b01_b02.roles = ["data"]
+        asset_b01_b02.extra_fields = {"eo:bands": [{"name": "B01"}, {"name": "B02"}]}
+
+        item.assets = {"B01_B02": asset_b01_b02}
+
+        band_assets = _get_band_assets_from_items([item], requested_bands=["B04"])
+
+        assert "B01_B02" not in band_assets, (
+            "Asset that declares bands [B01, B02] must be dropped when only B04 is requested."
+        )
 
 
 class TestRetryLogic:
