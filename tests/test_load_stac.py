@@ -275,9 +275,9 @@ class TestMediaTypeValidation:
 
         band_assets = _get_band_assets_from_items([item], requested_bands=["B04"])
 
-        assert "B01_B02" not in band_assets, (
-            "Asset that declares bands [B01, B02] must be dropped when only B04 is requested."
-        )
+        assert (
+            "B01_B02" not in band_assets
+        ), "Asset that declares bands [B01, B02] must be dropped when only B04 is requested."
 
 
 class TestRetryLogic:
