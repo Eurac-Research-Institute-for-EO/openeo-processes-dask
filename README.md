@@ -90,3 +90,9 @@ The raw json for a specific process can be imported using `from openeo_processes
 To bump these specs to a later version use:
 `git -C openeo_processes_dask_slim/specs/openeo-processes checkout <tag>`
 `git add openeo_processes_dask_slim/specs/openeo-processes`
+
+---
+
+## Known issues
+
+See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for a list of known issues and technical debt in this codebase.
