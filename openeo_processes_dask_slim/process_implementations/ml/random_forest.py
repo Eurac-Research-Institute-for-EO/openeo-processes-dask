@@ -1,3 +1,4 @@
+import warnings
 from typing import List, Optional, Union
 
 import dask
@@ -135,17 +136,46 @@ def predict_random_forest(
 
     if isinstance(data, xr.Dataset):
         feature_names = model.feature_names
-        n_features = len(feature_names)
         data_vars = list(data.data_vars)
-        if len(data_vars) != n_features:
-            raise Exception(
-                f"Number of data variables ({len(data_vars)}) does not match "
-                f"number of features the model was trained with ({n_features})."
-            )
-        if set(data_vars) != set(feature_names):
-            ordered_vars = data_vars
-        else:
+
+        if feature_names is not None:
+            data_var_set = set(data_vars)
+            feature_set = set(feature_names)
+            missing = feature_set - data_var_set
+            extra = data_var_set - feature_set
+            if missing:
+                raise Exception(
+                    f"Model expects features {list(missing)}, "
+                    f"but they are not present in the data cube. "
+                    f"Available variables: {data_vars}."
+                )
+            if extra:
+                raise Exception(
+                    f"Data cube contains variables {list(extra)} "
+                    f"that are not in the model's feature set {feature_names}. "
+                    f"Use filter_bands to select only the expected features."
+                )
+
+            if len(data_vars) != len(feature_names):
+                raise Exception(
+                    f"Number of data variables ({len(data_vars)}) does not match "
+                    f"number of features the model was trained with ({len(feature_names)})."
+                )
+
             ordered_vars = feature_names
+            n_features = len(feature_names)
+        else:
+            if isinstance(context, dict) and "feature_order" in context:
+                ordered_vars = context["feature_order"]
+            else:
+                ordered_vars = data_vars
+                warnings.warn(
+                    "Model has no feature_names and context['feature_order'] is not set. "
+                    "Using Dataset variable order. This may lead to silent prediction errors "
+                    "if the order does not match the training order."
+                )
+            n_features = len(ordered_vars)
+
         sample_var = data[ordered_vars[0]]
         stacks = [data[name].data for name in ordered_vars]
         stacked = da.stack(stacks, axis=0)

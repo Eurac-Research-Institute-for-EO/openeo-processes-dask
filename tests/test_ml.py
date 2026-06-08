@@ -137,17 +137,133 @@ def test_predict_random_forest_dask(
         predictors_vars=predictors_vars,
     )
 
-    n_features = len(model.feature_names)
+    feature_names = model.feature_names
+    n_features = len(feature_names)
     shape = (10, n_features)
     data = np.random.default_rng(42).random(shape).astype(np.float64)
     ds = xr.Dataset(
-        {"B02": xr.DataArray(dask.array.from_array(data, chunks=-1), dims=["y", "x"])}
+        {
+            name: xr.DataArray(dask.array.from_array(data, chunks=-1), dims=["y", "x"])
+            for name in feature_names
+        }
     )
 
     result = predict_random_forest(data=ds, model=model)
     assert isinstance(result, xr.Dataset)
     assert "result" in result.data_vars
     assert isinstance(result["result"].data, dask.array.Array)
+
+
+def test_predict_random_forest_feature_order_mismatch(
+    vector_data_cube, dask_client
+):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+
+    feature_names = list(model.feature_names)
+    n = len(feature_names)
+    shape = (10, n)
+    data = np.random.default_rng(42).random(shape).astype(np.float64)
+    reversed_names = list(reversed(feature_names))
+    ds = xr.Dataset(
+        {
+            name: xr.DataArray(data[:, i], dims=["y"])
+            for i, name in enumerate(reversed_names)
+        }
+    )
+    result = predict_random_forest(data=ds, model=model)
+    assert isinstance(result, xr.Dataset)
+
+
+def test_predict_random_forest_missing_variable(
+    vector_data_cube, dask_client
+):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+
+    ds = xr.Dataset(
+        {"wrong_name": xr.DataArray(np.ones(10), dims=["y"])}
+    )
+    with pytest.raises(Exception, match="not present"):
+        predict_random_forest(data=ds, model=model)
+
+
+def test_predict_random_forest_extra_variable(
+    vector_data_cube, dask_client
+):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+
+    feature_names = list(model.feature_names)
+    ds = xr.Dataset(
+        {
+            **{name: xr.DataArray(np.ones(10), dims=["y"]) for name in feature_names},
+            "extra_var": xr.DataArray(np.ones(10), dims=["y"]),
+        }
+    )
+    with pytest.raises(Exception, match="not in the model"):
+        predict_random_forest(data=ds, model=model)
+
+
+def test_predict_random_forest_no_feature_names(
+    vector_data_cube, dask_client
+):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+    model.feature_names = None
+
+    ds = xr.Dataset(
+        {"B02": xr.DataArray(np.ones(10), dims=["y"])}
+    )
+    with pytest.warns(UserWarning, match="no feature_names"):
+        predict_random_forest(data=ds, model=model)
+
+
+def test_predict_random_forest_feature_order_context(
+    vector_data_cube, dask_client
+):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+    model.feature_names = None
+
+    ds = xr.Dataset(
+        {"B02": xr.DataArray(np.ones(10), dims=["y"])}
+    )
+    result = predict_random_forest(
+        data=ds, model=model, context={"feature_order": ["B02"]}
+    )
+    assert isinstance(result, xr.Dataset)
+    assert "result" in result.data_vars
 
 
 def test_fit_curve_preserves_dask_laziness(temporal_interval, bounding_box):
