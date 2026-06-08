@@ -4,6 +4,9 @@ import numpy as np
 import odc.geo.xr
 import xarray as xr
 
+from openeo_processes_dask_slim.process_implementations.cubes.utils import (
+    ensure_raster_cube,
+)
 from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
 from openeo_processes_dask_slim.process_implementations.exceptions import (
     OverlapResolverMissing,
@@ -366,4 +369,8 @@ def merge_cubes(
 
     if isinstance(cube1, xr.Dataset):
         return merge_dataset_cubes(cube1, cube2, overlap_resolver, context)
-    return merge_dataarray_cubes(cube1, cube2, overlap_resolver, context)
+    raise TypeError(
+        "RasterCube must be an xr.Dataset in merge_cubes, "
+        f"got {type(cube1).__name__}. "
+        "DataArray inputs are no longer supported."
+    )

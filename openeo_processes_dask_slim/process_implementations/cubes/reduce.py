@@ -8,6 +8,9 @@ from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge imp
     restore_dataset_metadata,
     virtual_bands_to_dataset,
 )
+from openeo_processes_dask_slim.process_implementations.cubes.utils import (
+    ensure_raster_cube,
+)
 from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
 from openeo_processes_dask_slim.process_implementations.exceptions import (
     DimensionNotAvailable,
@@ -22,7 +25,8 @@ def reduce_dimension(
     dimension: str,
     context: Optional[dict] = None,
 ) -> RasterCube:
-    if dimension == "bands" and isinstance(data, xr.Dataset):
+    ensure_raster_cube(data, "reduce_dimension")
+    if dimension == "bands":
         band_array, meta = dataset_to_virtual_bands(data, dim="bands")
         dim_labels = band_array[dimension].values
         positional_parameters = {"data": 0}
@@ -79,6 +83,7 @@ def reduce_dimension(
 def reduce_spatial(
     data: RasterCube, reducer: Callable, context: Optional[dict] = None
 ) -> RasterCube:
+    ensure_raster_cube(data, "reduce_spatial")
     positional_parameters = {"data": 0}
     named_parameters = {"context": context}
 
