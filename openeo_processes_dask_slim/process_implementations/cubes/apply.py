@@ -5,10 +5,11 @@ import odc.geo.xr
 import scipy.ndimage
 import xarray as xr
 
-from openeo_processes_dask_slim.process_implementations.cubes.utils import (
-    _capture_var_metadata,
-    _detect_band_permutation,
-    _restore_var_metadata,
+from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
+    dataset_to_virtual_bands,
+    detect_band_permutation,
+    restore_dataset_metadata,
+    virtual_bands_to_dataset,
 )
 from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
 from openeo_processes_dask_slim.process_implementations.exceptions import (
@@ -48,8 +49,7 @@ def apply_dimension(
         context = {}
 
     if dimension == "bands" and isinstance(data, xr.Dataset):
-        meta = _capture_var_metadata(data)
-        band_array = data.to_array(dim="bands")
+        band_array, meta = dataset_to_virtual_bands(data, dim="bands")
         original_band_labels = band_array[dimension].values
         positional_parameters = {"data": 0}
         named_parameters = {"context": context}
@@ -77,7 +77,7 @@ def apply_dimension(
         if isinstance(result, xr.DataArray) and dimension in result.dims:
             out_len = len(result[dimension])
             if out_len == len(original_band_labels):
-                permuted = _detect_band_permutation(
+                permuted = detect_band_permutation(
                     result, reordered_band_array, dimension
                 )
                 if permuted is not None:
@@ -97,15 +97,12 @@ def apply_dimension(
                     meta["order"] = list(original_band_labels[:out_len])
                 except ValueError:
                     pass
-            result = result.to_dataset(dim=dimension)
+            result = virtual_bands_to_dataset(result, meta, dim=dimension)
         elif not isinstance(result, xr.Dataset):
             result = result.to_dataset(name="result")
-        result = _restore_var_metadata(result, meta)
-        if data.odc.crs is not None:
-            try:
-                result = odc.geo.xr.assign_crs(result, crs=data.odc.crs)
-            except ValueError:
-                pass
+            result = restore_dataset_metadata(result, meta)
+        else:
+            result = restore_dataset_metadata(result, meta)
         return result
 
     if dimension not in data.dims:

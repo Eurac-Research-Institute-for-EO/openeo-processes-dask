@@ -6,9 +6,10 @@ import pandas as pd
 import xarray as xr
 from numpy.typing import ArrayLike
 
-from openeo_processes_dask_slim.process_implementations.cubes.utils import (
-    _capture_var_metadata,
-    _restore_var_metadata,
+from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
+    dataset_to_virtual_bands,
+    restore_dataset_metadata,
+    virtual_bands_to_dataset,
 )
 from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
 from openeo_processes_dask_slim.process_implementations.exceptions import (
@@ -26,9 +27,10 @@ def fit_curve(
     ignore_nodata: bool = True,
 ):
     was_dataset = isinstance(data, xr.Dataset)
-    meta = _capture_var_metadata(data) if was_dataset else None
     if was_dataset:
-        data = data.to_array(dim="bands")
+        data, meta = dataset_to_virtual_bands(data, dim="bands")
+    else:
+        meta = None
 
     if dimension not in data.dims:
         raise DimensionNotAvailable(
@@ -107,8 +109,7 @@ def fit_curve(
     fit_result = fit_result.transpose(*expected_dims_after)
 
     if was_dataset:
-        fit_result = fit_result.to_dataset(dim="bands")
-        fit_result = _restore_var_metadata(fit_result, meta)
+        fit_result = virtual_bands_to_dataset(fit_result, meta, dim="bands")
 
     return fit_result
 
