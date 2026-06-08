@@ -4,14 +4,13 @@ These tests verify that dask graph sizes grow linearly with the number
 of variables, not super-linearly, and that no eager compute is triggered.
 """
 
+import dask
+import dask.array as da
 import numpy as np
 import pytest
 
-import dask
-import dask.array as da
-
-from openeo_processes_dask_slim.process_implementations.cubes.mask import mask
 from openeo_processes_dask_slim.process_implementations.cubes.apply import apply_kernel
+from openeo_processes_dask_slim.process_implementations.cubes.mask import mask
 
 
 @pytest.fixture
@@ -41,7 +40,9 @@ class TestGraphSize:
     def test_mask_graph_grows_linearly(self, wide_dataset):
         mask_data = wide_dataset > 0.5
         result = mask(data=wide_dataset, mask=mask_data, replacement=-1)
-        n_tasks = sum(len(var.data.__dask_graph__()) for var in result.data_vars.values())
+        n_tasks = sum(
+            len(var.data.__dask_graph__()) for var in result.data_vars.values()
+        )
         max_per_var = max(
             len(var.data.__dask_graph__()) for var in result.data_vars.values()
         )
@@ -58,7 +59,9 @@ class TestGraphSize:
     def test_apply_kernel_graph_grows_linearly(self, wide_dataset):
         kernel = np.ones((3, 3)) / 9
         result = apply_kernel(data=wide_dataset, kernel=kernel)
-        n_tasks = sum(len(var.data.__dask_graph__()) for var in result.data_vars.values())
+        n_tasks = sum(
+            len(var.data.__dask_graph__()) for var in result.data_vars.values()
+        )
         n_vars = len(result.data_vars)
         max_per_var = max(
             len(var.data.__dask_graph__()) for var in result.data_vars.values()
