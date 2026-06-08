@@ -67,6 +67,10 @@ ml = ["xgboost"]
 testpaths = [
     "tests",
 ]
+markers = [
+    "xgboost: tests that require xgboost dask training",
+    "integration: tests that require external services or heavy computation",
+]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
