@@ -272,7 +272,6 @@ def test_curve_fitting(temporal_interval, bounding_box, random_raster_data):
     assert result.odc.crs == predictions.odc.crs
 
 
-
 def test_fit_curve_preserves_dask_laziness(temporal_interval, bounding_box):
     """P1.1: fit_curve preserves dask laziness (no eager .persist())."""
     np.random.seed(42)

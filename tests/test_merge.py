@@ -498,6 +498,8 @@ def test_merge_dataset_conflicting_and_non_conflicting():
         merged["shared"].values, ds1["shared"].values + ds2["shared"].values
     )
     np.testing.assert_array_equal(merged["B02"].values, ds1["B02"].values)
+
+
 def test_merge_cubes_disjoint_coords_alignment():
     """P0.3: merge_cubes aligns float coordinates for disjoint variables."""
     ds1 = xr.Dataset(
