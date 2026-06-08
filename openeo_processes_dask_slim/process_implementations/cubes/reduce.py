@@ -3,9 +3,13 @@ from typing import Callable, Optional
 import numpy as np
 import xarray as xr
 
+from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
+    dataset_to_virtual_bands,
+    restore_dataset_metadata,
+    virtual_bands_to_dataset,
+)
 from openeo_processes_dask_slim.process_implementations.cubes.utils import (
-    _capture_var_metadata,
-    _restore_var_metadata,
+    ensure_raster_cube,
 )
 from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
 from openeo_processes_dask_slim.process_implementations.exceptions import (
@@ -21,9 +25,9 @@ def reduce_dimension(
     dimension: str,
     context: Optional[dict] = None,
 ) -> RasterCube:
-    if dimension == "bands" and isinstance(data, xr.Dataset):
-        meta = _capture_var_metadata(data)
-        band_array = data.to_array(dim="bands")
+    ensure_raster_cube(data, "reduce_dimension")
+    if dimension == "bands":
+        band_array, meta = dataset_to_virtual_bands(data, dim="bands")
         dim_labels = band_array[dimension].values
         positional_parameters = {"data": 0}
         reduced_data = band_array.reduce(
@@ -35,10 +39,12 @@ def reduce_dimension(
             dim_labels=dim_labels,
         )
         if isinstance(reduced_data, xr.DataArray) and "bands" in reduced_data.dims:
-            reduced_data = reduced_data.to_dataset(dim="bands")
+            reduced_data = virtual_bands_to_dataset(reduced_data, meta, dim="bands")
         elif not isinstance(reduced_data, xr.Dataset):
             reduced_data = reduced_data.to_dataset(name="result")
-        reduced_data = _restore_var_metadata(reduced_data, meta)
+            reduced_data = restore_dataset_metadata(reduced_data, meta)
+        else:
+            reduced_data = restore_dataset_metadata(reduced_data, meta)
         reduced_data.attrs["reduced_dimensions_min_values"] = {
             "bands": data.attrs.get("reduced_dimensions_min_values", {}).get("bands", 0)
         }
@@ -77,6 +83,7 @@ def reduce_dimension(
 def reduce_spatial(
     data: RasterCube, reducer: Callable, context: Optional[dict] = None
 ) -> RasterCube:
+    ensure_raster_cube(data, "reduce_spatial")
     positional_parameters = {"data": 0}
     named_parameters = {"context": context}
 

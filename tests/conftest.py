@@ -30,6 +30,19 @@ def dask_client():
     client.shutdown()
 
 
+@pytest.fixture(scope="module")
+def xgboost_client():
+    from dask.distributed import Client
+
+    client = Client(
+        n_workers=1,
+        threads_per_worker=1,
+        dashboard_address=":0",
+    )
+    yield client
+    client.close(timeout=10)
+
+
 def _random_raster_data(size, dtype, seed=42):
     rng = np.random.default_rng(seed)
     data = rng.integers(-100, 100, size=size)

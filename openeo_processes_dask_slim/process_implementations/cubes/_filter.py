@@ -11,10 +11,12 @@ import shapely
 import xarray as xr
 from openeo_pg_parser_networkx.pg_schema import BoundingBox, TemporalInterval
 
+from openeo_processes_dask_slim.process_implementations.cubes.utils import (
+    ensure_raster_cube,
+)
 from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
 from openeo_processes_dask_slim.process_implementations.exceptions import (
     BandFilterParameterMissing,
-    DimensionMissing,
     DimensionNotAvailable,
     TemporalExtentEmpty,
     TooManyDimensions,
@@ -36,6 +38,7 @@ __all__ = [
 def filter_temporal(
     data: RasterCube, extent: TemporalInterval, dimension: str = None
 ) -> RasterCube:
+    ensure_raster_cube(data, "filter_temporal")
     temporal_dims = data.openeo.temporal_dims
 
     if dimension is not None:
@@ -103,7 +106,8 @@ def filter_temporal(
 def filter_labels(
     data: RasterCube, condition: Callable, dimension: str, context: Optional[Any] = None
 ) -> RasterCube:
-    if isinstance(data, xr.Dataset) and dimension == "bands":
+    ensure_raster_cube(data, "filter_labels")
+    if dimension == "bands":
         labels = list(data.data_vars)
         if not context:
             context = {}
@@ -142,33 +146,22 @@ def filter_labels(
 
 
 def filter_bands(data: RasterCube, bands: list[str] = None) -> RasterCube:
+    ensure_raster_cube(data, "filter_bands")
     if bands is None:
         raise BandFilterParameterMissing(
             "The process `filter_bands` requires the parameters `bands` to be set."
         )
 
-    if isinstance(data, xr.Dataset):
-        missing = [b for b in bands if b not in data.data_vars]
-        if missing:
-            raise Exception(
-                f"The provided bands: {bands} are not all available in the datacube. Please modify the bands parameter of filter_bands and choose among: {list(data.data_vars)}."
-            )
-        return data[bands]
-
-    if len(data.openeo.band_dims) < 1:
-        raise DimensionMissing("A band dimension is missing.")
-    band_dim = data.openeo.band_dims[0]
-
-    try:
-        data = data.sel(**{band_dim: bands})
-    except Exception as e:
+    missing = [b for b in bands if b not in data.data_vars]
+    if missing:
         raise Exception(
-            f"The provided bands: {bands} are not all available in the datacube. Please modify the bands parameter of filter_bands and choose among: {data[band_dim].values}."
+            f"The provided bands: {bands} are not all available in the datacube. Please modify the bands parameter of filter_bands and choose among: {list(data.data_vars)}."
         )
-    return data
+    return data[bands]
 
 
 def filter_bbox(data: RasterCube, extent: BoundingBox) -> RasterCube:
+    ensure_raster_cube(data, "filter_bbox")
     try:
         odc_crs = data.odc.crs
         if odc_crs is not None:

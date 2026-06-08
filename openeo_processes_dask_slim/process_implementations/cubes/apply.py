@@ -5,10 +5,14 @@ import odc.geo.xr
 import scipy.ndimage
 import xarray as xr
 
+from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
+    dataset_to_virtual_bands,
+    detect_band_permutation,
+    restore_dataset_metadata,
+    virtual_bands_to_dataset,
+)
 from openeo_processes_dask_slim.process_implementations.cubes.utils import (
-    _capture_var_metadata,
-    _detect_band_permutation,
-    _restore_var_metadata,
+    ensure_raster_cube,
 )
 from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
 from openeo_processes_dask_slim.process_implementations.exceptions import (
@@ -22,6 +26,7 @@ __all__ = ["apply", "apply_dimension", "apply_kernel"]
 def apply(
     data: RasterCube, process: Callable, context: Optional[dict] = None
 ) -> RasterCube:
+    ensure_raster_cube(data, "apply")
     positional_parameters = {"x": 0}
     named_parameters = {"context": context}
     result = xr.apply_ufunc(
@@ -44,12 +49,12 @@ def apply_dimension(
     target_dimension: Optional[str] = None,
     context: Optional[dict] = None,
 ) -> RasterCube:
+    ensure_raster_cube(data, "apply_dimension")
     if context is None:
         context = {}
 
-    if dimension == "bands" and isinstance(data, xr.Dataset):
-        meta = _capture_var_metadata(data)
-        band_array = data.to_array(dim="bands")
+    if dimension == "bands":
+        band_array, meta = dataset_to_virtual_bands(data, dim="bands")
         original_band_labels = band_array[dimension].values
         positional_parameters = {"data": 0}
         named_parameters = {"context": context}
@@ -77,7 +82,7 @@ def apply_dimension(
         if isinstance(result, xr.DataArray) and dimension in result.dims:
             out_len = len(result[dimension])
             if out_len == len(original_band_labels):
-                permuted = _detect_band_permutation(
+                permuted = detect_band_permutation(
                     result, reordered_band_array, dimension
                 )
                 if permuted is not None:
@@ -97,15 +102,12 @@ def apply_dimension(
                     meta["order"] = list(original_band_labels[:out_len])
                 except ValueError:
                     pass
-            result = result.to_dataset(dim=dimension)
+            result = virtual_bands_to_dataset(result, meta, dim=dimension)
         elif not isinstance(result, xr.Dataset):
             result = result.to_dataset(name="result")
-        result = _restore_var_metadata(result, meta)
-        if data.odc.crs is not None:
-            try:
-                result = odc.geo.xr.assign_crs(result, crs=data.odc.crs)
-            except ValueError:
-                pass
+            result = restore_dataset_metadata(result, meta)
+        else:
+            result = restore_dataset_metadata(result, meta)
         return result
 
     if dimension not in data.dims:
@@ -207,6 +209,7 @@ def apply_kernel(
     border: Union[float, str, None] = 0,
     replace_invalid: Optional[float] = 0,
 ) -> RasterCube:
+    ensure_raster_cube(data, "apply_kernel")
     kernel = np.asarray(kernel)
     if any(dim % 2 == 0 for dim in kernel.shape):
         raise KernelDimensionsUneven(
@@ -221,37 +224,23 @@ def apply_kernel(
 
         data_masked = data.fillna(fill_value)
 
-        if isinstance(data, xr.Dataset):
-            result_vars = {}
-            for var_name in data.data_vars:
-                var_data = data_masked[var_name]
-                result = xr.apply_ufunc(
-                    convolved,
-                    var_data,
-                    vectorize=True,
-                    dask="parallelized",
-                    input_core_dims=[dims],
-                    output_core_dims=[dims],
-                    output_dtypes=[var_data.dtype],
-                    dask_gufunc_kwargs={"allow_rechunk": True},
-                ).transpose(*data[var_name].dims)
-                result_vars[var_name] = result
-            return xr.Dataset(
-                result_vars, coords=data.coords, attrs=data.attrs
-            ).transpose(*data.dims)
-
-        dtype = data.dtype
-
-        return xr.apply_ufunc(
-            convolved,
-            data_masked,
-            vectorize=True,
-            dask="parallelized",
-            input_core_dims=[dims],
-            output_core_dims=[dims],
-            output_dtypes=[dtype],
-            dask_gufunc_kwargs={"allow_rechunk": True},
-        ).transpose(*data.dims)
+        result_vars = {}
+        for var_name in data.data_vars:
+            var_data = data_masked[var_name]
+            result = xr.apply_ufunc(
+                convolved,
+                var_data,
+                vectorize=True,
+                dask="parallelized",
+                input_core_dims=[dims],
+                output_core_dims=[dims],
+                output_dtypes=[var_data.dtype],
+                dask_gufunc_kwargs={"allow_rechunk": True},
+            ).transpose(*data[var_name].dims)
+            result_vars[var_name] = result
+        return xr.Dataset(result_vars, coords=data.coords, attrs=data.attrs).transpose(
+            *data.dims
+        )
 
     openeo_scipy_modes = {
         "replicate": "nearest",

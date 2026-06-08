@@ -1,6 +1,8 @@
 from functools import partial
+from unittest.mock import patch
 
 import dask
+import dask.array as da
 import geopandas as gpd
 import numpy as np
 import pytest
@@ -23,8 +25,11 @@ from openeo_processes_dask_slim.process_implementations.ml import (
 )
 from tests.mockdata import create_fake_rastercube
 
+# ── xgboost integration tests ─────────────────────────────────────────────
 
-def test_fit_regr_random_forest(vector_data_cube, dask_client):
+
+@pytest.mark.xgboost
+def test_fit_regr_random_forest(vector_data_cube, xgboost_client):
     predictors_vars = ["value2"]
     target_var = "value1"
 
@@ -38,8 +43,9 @@ def test_fit_regr_random_forest(vector_data_cube, dask_client):
     assert isinstance(model, xgb.core.Booster)
 
 
+@pytest.mark.xgboost
 def test_fit_regr_random_forest_inline_geojson(
-    vector_data_cube: gpd.GeoDataFrame, dask_client
+    vector_data_cube: gpd.GeoDataFrame, xgboost_client
 ):
     predictors_vars = ["value2"]
     target_var = "value1"
@@ -52,6 +58,148 @@ def test_fit_regr_random_forest_inline_geojson(
     )
 
     assert isinstance(model, xgb.core.Booster)
+
+
+@pytest.mark.xgboost
+def test_predict_random_forest_dask(xgboost_client, vector_data_cube):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+
+    feature_names = model.feature_names
+    n_features = len(feature_names)
+    shape = (10, n_features)
+    data = np.random.default_rng(42).random(shape).astype(np.float64)
+    ds = xr.Dataset(
+        {
+            name: xr.DataArray(dask.array.from_array(data, chunks=-1), dims=["y", "x"])
+            for name in feature_names
+        }
+    )
+
+    result = predict_random_forest(data=ds, model=model)
+    assert isinstance(result, xr.Dataset)
+    assert "result" in result.data_vars
+    assert isinstance(result["result"].data, dask.array.Array)
+
+
+# ── prediction unit tests (mock-based, no training needed) ─────────────────
+
+
+def _make_mock_model(feature_names=None):
+    model = _make_mock_model
+    model.feature_names = feature_names
+    return model
+
+
+@pytest.mark.xgboost
+def test_predict_random_forest_feature_order_mismatch(xgboost_client, vector_data_cube):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+
+    feature_names = list(model.feature_names)
+    n = len(feature_names)
+    shape = (10, n)
+    data = np.random.default_rng(42).random(shape).astype(np.float64)
+    reversed_names = list(reversed(feature_names))
+    ds = xr.Dataset(
+        {
+            name: xr.DataArray(data[:, i], dims=["y"])
+            for i, name in enumerate(reversed_names)
+        }
+    )
+    result = predict_random_forest(data=ds, model=model)
+    assert isinstance(result, xr.Dataset)
+
+
+@pytest.mark.xgboost
+def test_predict_random_forest_missing_variable(xgboost_client, vector_data_cube):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+
+    ds = xr.Dataset({"wrong_name": xr.DataArray(np.ones(10), dims=["y"])})
+    with pytest.raises(Exception, match="not present"):
+        predict_random_forest(data=ds, model=model)
+
+
+@pytest.mark.xgboost
+def test_predict_random_forest_extra_variable(xgboost_client, vector_data_cube):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+
+    feature_names = list(model.feature_names)
+    ds = xr.Dataset(
+        {
+            **{name: xr.DataArray(np.ones(10), dims=["y"]) for name in feature_names},
+            "extra_var": xr.DataArray(np.ones(10), dims=["y"]),
+        }
+    )
+    with pytest.raises(Exception, match="not in the model"):
+        predict_random_forest(data=ds, model=model)
+
+
+@pytest.mark.xgboost
+def test_predict_random_forest_no_feature_names(xgboost_client, vector_data_cube):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+    model.feature_names = None
+
+    ds = xr.Dataset({"B02": xr.DataArray(np.ones(10), dims=["y"])})
+    with pytest.warns(UserWarning, match="no feature_names"):
+        predict_random_forest(data=ds, model=model)
+
+
+@pytest.mark.xgboost
+def test_predict_random_forest_feature_order_context(xgboost_client, vector_data_cube):
+    predictors_vars = ["value2"]
+    target_var = "value1"
+    model = fit_regr_random_forest(
+        predictors=vector_data_cube,
+        target=vector_data_cube,
+        target_var=target_var,
+        predictors_vars=predictors_vars,
+    )
+    model.feature_names = None
+
+    ds = xr.Dataset({"B02": xr.DataArray(np.ones(10), dims=["y"])})
+    result = predict_random_forest(
+        data=ds, model=model, context={"feature_order": ["B02"]}
+    )
+    assert isinstance(result, xr.Dataset)
+    assert "result" in result.data_vars
+
+
+# ── curve fitting tests (no xgboost) ──────────────────────────────────────
 
 
 @pytest.mark.parametrize("size", [(6, 5, 4, 3)])
@@ -124,31 +272,6 @@ def test_curve_fitting(temporal_interval, bounding_box, random_raster_data):
     assert result.odc.crs == predictions.odc.crs
 
 
-def test_predict_random_forest_dask(
-    vector_data_cube, dask_client, temporal_interval, bounding_box
-):
-    predictors_vars = ["value2"]
-    target_var = "value1"
-
-    model = fit_regr_random_forest(
-        predictors=vector_data_cube,
-        target=vector_data_cube,
-        target_var=target_var,
-        predictors_vars=predictors_vars,
-    )
-
-    n_features = len(model.feature_names)
-    shape = (10, n_features)
-    data = np.random.default_rng(42).random(shape).astype(np.float64)
-    ds = xr.Dataset(
-        {"B02": xr.DataArray(dask.array.from_array(data, chunks=-1), dims=["y", "x"])}
-    )
-
-    result = predict_random_forest(data=ds, model=model)
-    assert isinstance(result, xr.Dataset)
-    assert "result" in result.data_vars
-    assert isinstance(result["result"].data, dask.array.Array)
-
 
 def test_fit_curve_preserves_dask_laziness(temporal_interval, bounding_box):
     """P1.1: fit_curve preserves dask laziness (no eager .persist())."""
@@ -175,6 +298,6 @@ def test_fit_curve_preserves_dask_laziness(temporal_interval, bounding_box):
     for var_name in result.data_vars:
         var = result[var_name]
         assert isinstance(var.data, dask.array.Array)
-        # Verify the dask graph has not been eagerly computed
+
         graph = var.data.__dask_graph__()
         assert len(graph) > 0, f"Dask graph for {var_name} is empty (was computed)"

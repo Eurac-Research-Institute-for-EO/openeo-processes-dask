@@ -74,14 +74,11 @@ def test_mask_preserves_dask_laziness(temporal_interval, bounding_box):
         assert len(var.data.__dask_graph__()) > 0
 
 
-def test_mask_dataarray_legacy_path():
+def test_mask_rejects_dataarray():
     data = xr.DataArray(np.arange(4).reshape(2, 2), dims=["y", "x"])
     mask_da = xr.DataArray(np.array([[False, True], [False, False]]), dims=["y", "x"])
-    out = mask(data=data, mask=mask_da, replacement=-1)
-    assert isinstance(out, xr.DataArray)
-    assert out[0, 1] == -1
-    assert out[0, 0] == 0
-    assert out[1, 1] == 3
+    with pytest.raises(TypeError, match="RasterCube must be an xr.Dataset"):
+        mask(data=data, mask=mask_da, replacement=-1)
 
 
 def test_mask_dataset_per_variable_mask():

@@ -351,6 +351,153 @@ def test_merge_cubes_preserves_dask(
         assert isinstance(var.data, dask.array.Array)
 
 
+def _overlap_add(
+    data, axis=0, positional_parameters=None, named_parameters=None, **kwargs
+):
+    return data[0] + data[1]
+
+
+def test_merge_dataset_overlapping_equal_coords():
+    ds1 = xr.Dataset(
+        {
+            "B02": xr.DataArray(
+                np.ones((2, 2)), dims=["y", "x"], coords={"y": [0, 1], "x": [0, 1]}
+            ),
+            "B03": xr.DataArray(
+                np.ones((2, 2)) * 2, dims=["y", "x"], coords={"y": [0, 1], "x": [0, 1]}
+            ),
+        }
+    )
+    ds2 = xr.Dataset(
+        {
+            "B03": xr.DataArray(
+                np.ones((2, 2)) * 3, dims=["y", "x"], coords={"y": [0, 1], "x": [0, 1]}
+            ),
+        }
+    )
+    merged = merge_cubes(ds1, ds2, overlap_resolver=_overlap_add)
+    assert set(merged.data_vars) == {"B02", "B03"}
+    np.testing.assert_array_equal(
+        merged["B03"].values, ds1["B03"].values + ds2["B03"].values
+    )
+
+
+def test_merge_dataset_overlapping_close_float_coords():
+    ds1 = xr.Dataset(
+        {
+            "B02": xr.DataArray(np.ones((2,)), dims=["x"], coords={"x": [0.0, 1.0]}),
+        }
+    )
+    ds2 = xr.Dataset(
+        {
+            "B02": xr.DataArray(
+                np.ones((2,)) * 2, dims=["x"], coords={"x": [1e-7, 1.0000001]}
+            ),
+        }
+    )
+    merged = merge_cubes(ds1, ds2, overlap_resolver=_overlap_add)
+    assert len(merged["x"]) == 2
+    np.testing.assert_allclose(merged["x"].values, [0.0, 1.0], atol=1e-6)
+
+
+def test_merge_dataset_preserves_crs():
+    import odc.geo.xr
+
+    ds1 = odc.geo.xr.assign_crs(
+        xr.Dataset(
+            {
+                "B02": xr.DataArray(
+                    np.ones((2, 2)), dims=["y", "x"], coords={"y": [0, 1], "x": [0, 1]}
+                )
+            }
+        ),
+        crs="EPSG:4326",
+    )
+    ds2 = odc.geo.xr.assign_crs(
+        xr.Dataset(
+            {
+                "B03": xr.DataArray(
+                    np.ones((2, 2)), dims=["y", "x"], coords={"y": [0, 1], "x": [0, 1]}
+                )
+            }
+        ),
+        crs="EPSG:4326",
+    )
+    merged = merge_cubes(ds1, ds2)
+    assert merged.odc.crs == ds1.odc.crs
+
+
+def test_merge_dataset_preserves_dask_laziness():
+    import dask.array as da
+
+    ds1 = xr.Dataset(
+        {
+            "B02": xr.DataArray(
+                da.from_array(np.ones((2, 2)), chunks=-1),
+                dims=["y", "x"],
+                coords={"y": [0, 1], "x": [0, 1]},
+            )
+        }
+    )
+    ds2 = xr.Dataset(
+        {
+            "B03": xr.DataArray(
+                da.from_array(np.ones((2, 2)) * 2, chunks=-1),
+                dims=["y", "x"],
+                coords={"y": [0, 1], "x": [0, 1]},
+            )
+        }
+    )
+    merged = merge_cubes(ds1, ds2)
+    for var in merged.data_vars.values():
+        assert isinstance(var.data, da.Array)
+
+
+def test_merge_dataset_preserves_var_attrs():
+    ds1 = xr.Dataset(
+        {
+            "B02": xr.DataArray(
+                np.ones(2),
+                dims=["x"],
+                coords={"x": [0, 1]},
+                attrs={"description": "Band 2"},
+            )
+        }
+    )
+    ds2 = xr.Dataset(
+        {
+            "B03": xr.DataArray(
+                np.ones(2) * 2,
+                dims=["x"],
+                coords={"x": [0, 1]},
+                attrs={"description": "Band 3"},
+            )
+        }
+    )
+    merged = merge_cubes(ds1, ds2)
+    assert merged["B02"].attrs.get("description") == "Band 2"
+    assert merged["B03"].attrs.get("description") == "Band 3"
+
+
+def test_merge_dataset_conflicting_and_non_conflicting():
+    ds1 = xr.Dataset(
+        {
+            "B02": xr.DataArray(np.ones((2,)), dims=["x"], coords={"x": [0, 1]}),
+            "shared": xr.DataArray(np.ones((2,)) * 2, dims=["x"], coords={"x": [0, 1]}),
+        }
+    )
+    ds2 = xr.Dataset(
+        {
+            "B03": xr.DataArray(np.ones((2,)) * 3, dims=["x"], coords={"x": [0, 1]}),
+            "shared": xr.DataArray(np.ones((2,)) * 4, dims=["x"], coords={"x": [0, 1]}),
+        }
+    )
+    merged = merge_cubes(ds1, ds2, overlap_resolver=_overlap_add)
+    assert set(merged.data_vars) == {"B02", "shared", "B03"}
+    np.testing.assert_array_equal(
+        merged["shared"].values, ds1["shared"].values + ds2["shared"].values
+    )
+    np.testing.assert_array_equal(merged["B02"].values, ds1["B02"].values)
 def test_merge_cubes_disjoint_coords_alignment():
     """P0.3: merge_cubes aligns float coordinates for disjoint variables."""
     ds1 = xr.Dataset(
