@@ -5,14 +5,13 @@ Static check script for RasterCube Dataset migration.
 Reports on patterns that indicate incomplete migration from xr.DataArray
 to xr.Dataset as the RasterCube contract.
 
-Phase 0 — informational only, does not fail CI.
-
 Usage:
-    python scripts/check_rastercube_migration.py
+    python scripts/check_rastercube_migration.py          # informational
+    python scripts/check_rastercube_migration.py --ci     # fail on ERROR/WARN
 """
 
+import argparse
 import ast
-import os
 import sys
 from pathlib import Path
 
@@ -27,11 +26,46 @@ DATA_MODEL = (
     / "data_model.py"
 )
 
+ALLOWLIST = [
+    # _xr_interop.py: registers the openeo accessor on both DataArray and Dataset
+    "openeo_processes_dask_slim/process_implementations/cubes/_xr_interop.py:23:register_dataarray_accessor",
+    # geometries.py: VectorCube functions, not RasterCube
+    "openeo_processes_dask_slim/process_implementations/cubes/geometries.py:114:xr.DataArray",
+    "openeo_processes_dask_slim/process_implementations/cubes/geometries.py:126:isinstance(..., xr.DataArray)",
+    "openeo_processes_dask_slim/process_implementations/cubes/geometries.py:157:isinstance(..., xr.DataArray)",
+    # apply.py: checks if apply_ufunc returned DataArray (bounded bridge output)
+    "openeo_processes_dask_slim/process_implementations/cubes/apply.py:82:isinstance(..., xr.DataArray)",
+    # reduce.py: checks if reduce returned DataArray (bounded bridge output)
+    "openeo_processes_dask_slim/process_implementations/cubes/reduce.py:41:isinstance(..., xr.DataArray)",
+    # dataset_bridge.py: the centralized bridge module itself
+    "openeo_processes_dask_slim/process_implementations/cubes/dataset_bridge.py:47:to_array(",
+    # general.py: to_array for NaN mask merge (not a band bridge)
+    "openeo_processes_dask_slim/process_implementations/cubes/general.py:58:to_array(",
+    # merge.py: to_array in DataArray path for band reordering after combine_by_coords
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:223:to_array(",
+    # merge.py: .data access in DataArray merge path (not RasterCube input)
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:149:.data access",
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:150:.data access",
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:151:.data access",
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:179:.data access",
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:180:.data access",
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:271:.data access",
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:272:.data access",
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:338:.data access",
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:339:.data access",
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:341:.data access",
+    "openeo_processes_dask_slim/process_implementations/cubes/merge.py:342:.data access",
+]
+
 findings = []
 
 
+def is_allowlisted(file_rel, line, pattern):
+    key = f"{file_rel}:{line}:{pattern}"
+    return key in ALLOWLIST
+
+
 def check_rastercube_type():
-    """Check that RasterCube = xr.Dataset, not Union or DataArray."""
     src = DATA_MODEL.read_text()
     tree = ast.parse(src, filename=str(DATA_MODEL))
     for node in ast.walk(tree):
@@ -44,7 +78,7 @@ def check_rastercube_type():
                         and node.value.value.id == "xr"
                         and node.value.attr == "Dataset"
                     ):
-                        return  # OK — RasterCube = xr.Dataset
+                        return
                     findings.append(
                         {
                             "file": str(DATA_MODEL.relative_to(PROJECT_ROOT)),
@@ -64,15 +98,17 @@ def check_rastercube_type():
 
 
 def check_isinstance_dataarray():
-    """Find isinstance(..., xr.DataArray) in raster process files."""
     for pyfile in sorted(RASTER_DIR.rglob("*.py")):
         src = pyfile.read_text()
         tree = ast.parse(src, filename=str(pyfile))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 func = node.func
-                if (isinstance(func, ast.Attribute) and func.attr == "isinstance") or (
-                    isinstance(func, ast.Name) and func.id == "isinstance"
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "isinstance"
+                    or isinstance(func, ast.Name)
+                    and func.id == "isinstance"
                 ):
                     if len(node.args) >= 2:
                         arg2 = node.args[1]
@@ -82,18 +118,21 @@ def check_isinstance_dataarray():
                             and arg2.value.id == "xr"
                             and arg2.attr == "DataArray"
                         ):
-                            findings.append(
-                                {
-                                    "file": str(pyfile.relative_to(PROJECT_ROOT)),
-                                    "line": node.lineno,
-                                    "pattern": "isinstance(..., xr.DataArray)",
-                                    "severity": "WARN",
-                                }
-                            )
+                            file_rel = str(pyfile.relative_to(PROJECT_ROOT))
+                            if not is_allowlisted(
+                                file_rel, node.lineno, "isinstance(..., xr.DataArray)"
+                            ):
+                                findings.append(
+                                    {
+                                        "file": file_rel,
+                                        "line": node.lineno,
+                                        "pattern": "isinstance(..., xr.DataArray)",
+                                        "severity": "WARN",
+                                    }
+                                )
 
 
 def check_to_array_bridge():
-    """Find .to_array(dim=...) calls in raster process files."""
     for pyfile in sorted(RASTER_DIR.rglob("*.py")):
         src = pyfile.read_text()
         tree = ast.parse(src, filename=str(pyfile))
@@ -101,36 +140,37 @@ def check_to_array_bridge():
             if isinstance(node, ast.Call):
                 func = node.func
                 if isinstance(func, ast.Attribute) and func.attr == "to_array":
-                    findings.append(
-                        {
-                            "file": str(pyfile.relative_to(PROJECT_ROOT)),
-                            "line": node.lineno,
-                            "pattern": "to_array(",
-                            "severity": "INFO",
-                        }
-                    )
+                    file_rel = str(pyfile.relative_to(PROJECT_ROOT))
+                    if not is_allowlisted(file_rel, node.lineno, "to_array("):
+                        findings.append(
+                            {
+                                "file": file_rel,
+                                "line": node.lineno,
+                                "pattern": "to_array(",
+                                "severity": "WARN",
+                            }
+                        )
 
 
 def check_direct_data_access():
-    """Find direct .data access in raster process files."""
     for pyfile in sorted(RASTER_DIR.rglob("*.py")):
         src = pyfile.read_text()
         tree = ast.parse(src, filename=str(pyfile))
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute) and node.attr == "data":
-                parent = getattr(node, "parent", None) is None  # ast doesn't set parent
-                findings.append(
-                    {
-                        "file": str(pyfile.relative_to(PROJECT_ROOT)),
-                        "line": node.lineno,
-                        "pattern": ".data access",
-                        "severity": "INFO",
-                    }
-                )
+                file_rel = str(pyfile.relative_to(PROJECT_ROOT))
+                if not is_allowlisted(file_rel, node.lineno, ".data access"):
+                    findings.append(
+                        {
+                            "file": file_rel,
+                            "line": node.lineno,
+                            "pattern": ".data access",
+                            "severity": "INFO",
+                        }
+                    )
 
 
 def check_dataarray_register():
-    """Find xr.register_dataarray_accessor references."""
     for pyfile in sorted(RASTER_DIR.rglob("*.py")):
         src = pyfile.read_text()
         if "register_dataarray_accessor" in src:
@@ -142,24 +182,35 @@ def check_dataarray_register():
                         isinstance(func, ast.Attribute)
                         and func.attr == "register_dataarray_accessor"
                     ):
-                        findings.append(
-                            {
-                                "file": str(pyfile.relative_to(PROJECT_ROOT)),
-                                "line": node.lineno,
-                                "pattern": "register_dataarray_accessor",
-                                "severity": "INFO",
-                            }
-                        )
+                        file_rel = str(pyfile.relative_to(PROJECT_ROOT))
+                        if not is_allowlisted(
+                            file_rel, node.lineno, "register_dataarray_accessor"
+                        ):
+                            findings.append(
+                                {
+                                    "file": file_rel,
+                                    "line": node.lineno,
+                                    "pattern": "register_dataarray_accessor",
+                                    "severity": "INFO",
+                                }
+                            )
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Check RasterCube migration status")
+    parser.add_argument(
+        "--ci",
+        action="store_true",
+        help="Fail on ERROR or WARN findings (for CI use)",
+    )
+    args = parser.parse_args()
+
     check_rastercube_type()
     check_isinstance_dataarray()
     check_to_array_bridge()
     check_direct_data_access()
     check_dataarray_register()
 
-    # Remove duplicate .data findings (keep first occurrence per line per file)
     seen = set()
     unique_findings = []
     for f in findings:
@@ -168,9 +219,8 @@ def main():
             seen.add(key)
             unique_findings.append(f)
 
-    # Print report
     print("=" * 72)
-    print("  RasterCube Migration Static Check — Phase 0 (Informational)")
+    print("  RasterCube Migration Static Check")
     print("=" * 72)
 
     if not unique_findings:
@@ -192,10 +242,12 @@ def main():
         f"\n  Summary: {len(unique_findings)} total — "
         f"{error_count} ERROR, {warn_count} WARN, {info_count} INFO"
     )
-    print("  Phase 0 is informational only. No exit code failure.\n")
 
-    # Phase 0 does not fail CI
-    sys.exit(0)
+    if args.ci and (error_count > 0 or warn_count > 0):
+        print("\n  FAILED: --ci mode and ERROR/WARN findings exist.\n")
+        sys.exit(1)
+
+    print()
 
 
 if __name__ == "__main__":

@@ -74,6 +74,9 @@ jobs:
       - name: Pre-commit hooks
         run: poetry run pre-commit run --all-files
 
+      - name: RasterCube migration static check
+        run: poetry run python scripts/check_rastercube_migration.py --ci
+
       - name: Run pytest
         run: poetry run pytest --cov=openeo_processes_dask_slim --cov-report=xml
 
