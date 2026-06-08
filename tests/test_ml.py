@@ -135,9 +135,7 @@ def test_predict_random_forest_missing_variable(xgboost_client, vector_data_cube
         predictors_vars=predictors_vars,
     )
 
-    ds = xr.Dataset(
-        {"wrong_name": xr.DataArray(np.ones(10), dims=["y"])}
-    )
+    ds = xr.Dataset({"wrong_name": xr.DataArray(np.ones(10), dims=["y"])})
     with pytest.raises(Exception, match="not present"):
         predict_random_forest(data=ds, model=model)
 
@@ -176,9 +174,7 @@ def test_predict_random_forest_no_feature_names(xgboost_client, vector_data_cube
     )
     model.feature_names = None
 
-    ds = xr.Dataset(
-        {"B02": xr.DataArray(np.ones(10), dims=["y"])}
-    )
+    ds = xr.Dataset({"B02": xr.DataArray(np.ones(10), dims=["y"])})
     with pytest.warns(UserWarning, match="no feature_names"):
         predict_random_forest(data=ds, model=model)
 
@@ -195,9 +191,7 @@ def test_predict_random_forest_feature_order_context(xgboost_client, vector_data
     )
     model.feature_names = None
 
-    ds = xr.Dataset(
-        {"B02": xr.DataArray(np.ones(10), dims=["y"])}
-    )
+    ds = xr.Dataset({"B02": xr.DataArray(np.ones(10), dims=["y"])})
     result = predict_random_forest(
         data=ds, model=model, context={"feature_order": ["B02"]}
     )

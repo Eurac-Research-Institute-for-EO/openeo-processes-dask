@@ -34,6 +34,7 @@ def restore_dataset_metadata(result, metadata):
     crs = metadata.get("crs")
     if crs is not None:
         import odc.geo.xr
+
         try:
             result = odc.geo.xr.assign_crs(result, crs=crs)
         except (ValueError, ImportError):

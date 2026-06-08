@@ -28,7 +28,7 @@ Affected files:
 
 ## 2. `to_array` / `to_dataset` Bridge Risks
 
-Any cross-band operation (`reduce_dimension` on bands, `apply_dimension` on bands, `ndvi`, `fit_curve`) must convert via:
+Any cross-band operation (`reduce_dimension` on bands, `apply_dimension` on bands, UDF adaptation, `fit_curve`) must convert via:
 
 ```python
 band_array = data.to_array(dim="bands")    # Dataset → DataArray
@@ -47,6 +47,12 @@ Per-variable attributes and variable order must be manually preserved via `_capt
 ### 2c. No Dedicated Test Coverage
 
 The bridge pattern, metadata round-trip, and dtype coercion behavior lack dedicated test coverage.
+
+### 2d. Multi-Resolution Limits
+
+`xr.Dataset` can hold variables with different dimensionality and coordinate grids, which is one reason for the migration. The bridge pattern partially gives up that advantage: `Dataset.to_array(dim="bands")` must align variables into one array-like shape. For genuinely multi-resolution datasets, this can trigger implicit alignment, broadcasting, missing values, dtype coercion, or graph growth before the process-specific reducer even runs.
+
+**Recommendation**: Keep `to_array` bridges local and explicit, add tests with bands on different spatial grids/resolutions, and document which virtual-band processes require prior harmonization.
 
 ---
 
@@ -76,6 +82,8 @@ result_vars[var] = merge_cubes(cube1[var], cube2[var], overlap_resolver, context
 
 This means all ~230 lines of the DataArray merge logic (dimension alignment, overlap resolution, broadcast) are still exercised even for Dataset inputs. Bugs in the DataArray path affect Dataset users.
 
+**Multi-resolution impact**: `merge_cubes` is one of the most important processes for combining cubes with different spatial or temporal grids. The current Dataset path preserves data variables, attrs, order, and CRS at the Dataset boundary, but same-named variable conflicts still inherit the old DataArray alignment semantics. This should be treated as a high-priority review area for multi-resolution workflows.
+
 ---
 
 ## 6. Per-Variable Loop Overhead
@@ -83,3 +91,39 @@ This means all ~230 lines of the DataArray merge logic (dimension alignment, ove
 Processes that iterate over data variables (`apply_kernel`, `mask`) pay Python overhead proportional to the number of bands. Each iteration creates a separate `apply_ufunc` (or `where`) call with its own task graph. The DataArray approach processed the full 4D cube in a single operation.
 
 This is a correctness-preserving trade-off but has measurable performance implications for cubes with many bands.
+
+---
+
+## 7. `predict_random_forest` Feature Ordering Risk
+
+`predict_random_forest` supports Dataset input by stacking data variables into a feature axis:
+
+```python
+feature_names = model.feature_names
+data_vars = list(data.data_vars)
+if set(data_vars) != set(feature_names):
+    ordered_vars = data_vars
+else:
+    ordered_vars = feature_names
+```
+
+If the Dataset variable names do not match the model feature names exactly, the implementation silently falls back to the Dataset variable order. This can produce valid-looking predictions with the wrong feature ordering.
+
+**Impact**: The output remains an `xr.Dataset` and can preserve dask laziness, so this error may not surface structurally. It is a semantic correctness risk.
+
+**Recommendation**: Fail fast when model feature names and Dataset variables differ, unless the caller explicitly provides a feature mapping or ordered variable list.
+
+---
+
+## 8. Random-Forest ML Test Isolation Instability
+
+The random-forest tests pass individually in a Python 3.12 environment with local dask networking enabled, but the full `tests/test_ml.py` module is unstable. In the investigation environment:
+
+- `test_fit_regr_random_forest` passed.
+- `test_fit_regr_random_forest_inline_geojson` passed when run alone.
+- `test_predict_random_forest_dask` passed when run alone.
+- Running the full module failed in `test_fit_regr_random_forest_inline_geojson` with an `xgboost.dask` worker-address `KeyError` after an earlier random-forest training test.
+
+This points to dask/xgboost lifecycle or test-isolation problems rather than a direct Dataset migration failure.
+
+**Recommendation**: Use a smaller deterministic dask client fixture for xgboost tests, ensure each test fully closes workers before the next training run, and consider separating expensive xgboost integration tests from Dataset-shape unit tests.

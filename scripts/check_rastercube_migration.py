@@ -18,10 +18,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RASTER_DIR = (
-    PROJECT_ROOT
-    / "openeo_processes_dask_slim"
-    / "process_implementations"
-    / "cubes"
+    PROJECT_ROOT / "openeo_processes_dask_slim" / "process_implementations" / "cubes"
 )
 DATA_MODEL = (
     PROJECT_ROOT
@@ -74,10 +71,7 @@ def check_isinstance_dataarray():
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 func = node.func
-                if (
-                    isinstance(func, ast.Attribute)
-                    and func.attr == "isinstance"
-                ) or (
+                if (isinstance(func, ast.Attribute) and func.attr == "isinstance") or (
                     isinstance(func, ast.Name) and func.id == "isinstance"
                 ):
                     if len(node.args) >= 2:
@@ -185,19 +179,19 @@ def main():
 
     print()
 
-    for f in sorted(unique_findings, key=lambda x: (x["severity"], x["file"], x["line"])):
-        print(
-            f"  [{f['severity']:5s}] "
-            f"{f['file']}:{f['line']}  "
-            f"{f['pattern']}"
-        )
+    for f in sorted(
+        unique_findings, key=lambda x: (x["severity"], x["file"], x["line"])
+    ):
+        print(f"  [{f['severity']:5s}] " f"{f['file']}:{f['line']}  " f"{f['pattern']}")
 
     info_count = sum(1 for f in unique_findings if f["severity"] == "INFO")
     warn_count = sum(1 for f in unique_findings if f["severity"] == "WARN")
     error_count = sum(1 for f in unique_findings if f["severity"] == "ERROR")
 
-    print(f"\n  Summary: {len(unique_findings)} total — "
-          f"{error_count} ERROR, {warn_count} WARN, {info_count} INFO")
+    print(
+        f"\n  Summary: {len(unique_findings)} total — "
+        f"{error_count} ERROR, {warn_count} WARN, {info_count} INFO"
+    )
     print("  Phase 0 is informational only. No exit code failure.\n")
 
     # Phase 0 does not fail CI

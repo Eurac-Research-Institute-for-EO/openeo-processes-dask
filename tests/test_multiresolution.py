@@ -90,9 +90,7 @@ class TestNonHarmonizing:
     def test_rename_labels_sequential_rename(self, multires_cube):
         labels = list(multires_cube.data_vars)
         target = [f"var_{i}" for i in range(len(labels))]
-        result = rename_labels(
-            data=multires_cube, dimension="bands", target=target
-        )
+        result = rename_labels(data=multires_cube, dimension="bands", target=target)
         assert set(result.data_vars) == set(target)
 
     def test_mask_with_per_variable_mask(self, multires_cube):
@@ -116,6 +114,7 @@ class TestNonHarmonizing:
         result = mask(data=multires_cube_dask, mask=mask_data, replacement=-1)
         for var in result.data_vars:
             import dask
+
             assert isinstance(result[var].data, dask.array.Array)
 
     def test_filter_bands_preserves_crs(self, multires_cube):
@@ -130,8 +129,11 @@ class TestHarmonizingVirtualBand:
     but coarser variables may contribute NaN. These tests document current behavior.
     """
 
-    def test_apply_dimension_bands_produces_dataset(self, multires_cube, process_registry):
+    def test_apply_dimension_bands_produces_dataset(
+        self, multires_cube, process_registry
+    ):
         from functools import partial
+
         from openeo_pg_parser_networkx.pg_schema import ParameterReference
 
         process = partial(
@@ -142,6 +144,7 @@ class TestHarmonizingVirtualBand:
         from openeo_processes_dask_slim.process_implementations.cubes.apply import (
             apply_dimension,
         )
+
         result = apply_dimension(
             data=multires_cube,
             process=process,
@@ -149,8 +152,11 @@ class TestHarmonizingVirtualBand:
         )
         assert isinstance(result, xr.Dataset)
 
-    def test_reduce_dimension_bands_produces_dataset(self, multires_cube, process_registry):
+    def test_reduce_dimension_bands_produces_dataset(
+        self, multires_cube, process_registry
+    ):
         from functools import partial
+
         from openeo_pg_parser_networkx.pg_schema import ParameterReference
 
         process = partial(
@@ -161,6 +167,7 @@ class TestHarmonizingVirtualBand:
         from openeo_processes_dask_slim.process_implementations.cubes.reduce import (
             reduce_dimension,
         )
+
         result = reduce_dimension(
             data=multires_cube,
             reducer=process,
@@ -172,6 +179,7 @@ class TestHarmonizingVirtualBand:
         from openeo_processes_dask_slim.process_implementations.ml.curve_fitting import (
             fit_curve,
         )
+
         result = fit_curve(
             data=multires_cube,
             parameters=[1, 1],
@@ -181,9 +189,8 @@ class TestHarmonizingVirtualBand:
         assert isinstance(result, xr.Dataset)
 
     def test_run_udf_produces_dataset(self, multires_cube):
-        from openeo_processes_dask_slim.process_implementations.udf.udf import (
-            run_udf,
-        )
+        from openeo_processes_dask_slim.process_implementations.udf.udf import run_udf
+
         simple_udf = """
 from openeo.udf import XarrayDataCube, UdfData
 
@@ -201,6 +208,7 @@ def apply_datacube(cube: XarrayDataCube, context: dict) -> XarrayDataCube:
 class TestMultiResolutionDask:
     def test_dask_fixture_is_lazy(self, multires_cube_dask):
         import dask
+
         for var in multires_cube_dask.data_vars:
             assert isinstance(multires_cube_dask[var].data, dask.array.Array)
 

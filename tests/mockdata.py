@@ -55,9 +55,9 @@ def create_multiresolution_rastercube(
 
     coarse_x = fine_x[::2][:coarse_nx]
     coarse_y = fine_y[::2][:coarse_ny]
-    coarse_data = rng.integers(
-        -100, 100, size=(coarse_ny, coarse_nx, 4)
-    ).astype(np.float32)
+    coarse_data = rng.integers(-100, 100, size=(coarse_ny, coarse_nx, 4)).astype(
+        np.float32
+    )
     variables["B08"] = xr.DataArray(
         coarse_data,
         name="B08",

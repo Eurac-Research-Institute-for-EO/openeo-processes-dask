@@ -20,7 +20,9 @@ def band_dataset():
     y_coords = np.arange(46.1, 46.2, 0.02)
     t_coords = pd.date_range("2018-05-01", "2018-06-01", periods=4).values
     bands = ["B02", "B03", "B04", "B08"]
-    data = rng.integers(-100, 100, size=(len(y_coords), len(x_coords), 4, len(bands))).astype(np.float32)
+    data = rng.integers(
+        -100, 100, size=(len(y_coords), len(x_coords), 4, len(bands))
+    ).astype(np.float32)
     ds = xr.Dataset(
         {
             band: xr.DataArray(

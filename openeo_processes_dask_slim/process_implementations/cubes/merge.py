@@ -80,9 +80,7 @@ def merge_dataset_cubes(
     ]
 
     var_attrs = {v: cube1[v].attrs for v in cube1.data_vars}
-    var_attrs.update(
-        {v: cube2[v].attrs for v in cube2.data_vars if v not in var_attrs}
-    )
+    var_attrs.update({v: cube2[v].attrs for v in cube2.data_vars if v not in var_attrs})
 
     if in_both and (only_in1 or only_in2) and overlap_resolver is None:
         raise OverlapResolverMissing(
@@ -92,7 +90,11 @@ def merge_dataset_cubes(
     result_vars = {}
     for var in in_both:
         result_vars[var] = merge_dataset_variable_conflict(
-            var, cube1[var], cube2[var], overlap_resolver=overlap_resolver, context=context
+            var,
+            cube1[var],
+            cube2[var],
+            overlap_resolver=overlap_resolver,
+            context=context,
         )
     for var in only_in1:
         result_vars[var] = cube1[var]
