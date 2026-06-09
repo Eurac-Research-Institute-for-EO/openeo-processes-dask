@@ -1,5 +1,4 @@
 import xarray as xr
-
 from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
 
 __all__ = ["ddmc"]

@@ -9,7 +9,6 @@ import pytest
 import xarray as xr
 import xgboost as xgb
 from openeo_pg_parser_networkx.pg_schema import DEFAULT_CRS, ParameterReference
-
 from openeo_processes_dask_slim.process_implementations.core import process
 from openeo_processes_dask_slim.process_implementations.cubes.apply import (
     apply_dimension,
@@ -23,6 +22,7 @@ from openeo_processes_dask_slim.process_implementations.ml import (
     predict_curve,
     predict_random_forest,
 )
+
 from tests.mockdata import create_fake_rastercube
 
 # ── xgboost integration tests ─────────────────────────────────────────────

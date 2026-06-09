@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 import xarray as xr
-
 from openeo_processes_dask_slim.process_implementations.cubes._filter import (
     filter_bands,
 )
@@ -11,6 +10,7 @@ from openeo_processes_dask_slim.process_implementations.cubes.general import (
 )
 from openeo_processes_dask_slim.process_implementations.cubes.mask import mask
 from openeo_processes_dask_slim.process_implementations.cubes.merge import merge_cubes
+
 from tests.mockdata import create_multiresolution_rastercube
 
 

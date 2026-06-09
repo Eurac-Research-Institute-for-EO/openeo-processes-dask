@@ -7,7 +7,6 @@ import pandas as pd
 import xarray as xr
 from numpy.typing import ArrayLike
 from openeo_pg_parser_networkx.pg_schema import DateTime
-
 from openeo_processes_dask_slim.process_implementations.comparison import is_valid
 from openeo_processes_dask_slim.process_implementations.cubes.utils import (
     _is_dask_array,

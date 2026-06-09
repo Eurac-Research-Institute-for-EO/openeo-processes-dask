@@ -3,7 +3,6 @@ from typing import Callable
 
 import numpy as np
 import xarray as xr
-
 from openeo_processes_dask_slim.process_implementations.cubes.resample import (
     resample_cube_spatial,
 )

@@ -1,5 +1,4 @@
 import xarray as xr
-
 from openeo_processes_dask_slim.process_implementations.cubes.utils import (
     ensure_raster_cube,
 )

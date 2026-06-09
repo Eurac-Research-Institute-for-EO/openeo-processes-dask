@@ -2,7 +2,6 @@ from typing import Callable, Optional
 
 import numpy as np
 import xarray as xr
-
 from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
     dataset_to_virtual_bands,
     restore_dataset_metadata,

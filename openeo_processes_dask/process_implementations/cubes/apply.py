@@ -4,7 +4,6 @@ import numpy as np
 import odc.geo.xr
 import scipy.ndimage
 import xarray as xr
-
 from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
     dataset_to_virtual_bands,
     detect_band_permutation,
