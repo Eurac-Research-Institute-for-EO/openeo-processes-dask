@@ -5,6 +5,7 @@ import odc.geo.xr
 import pandas as pd
 import xarray as xr
 from numpy.typing import ArrayLike
+
 from openeo_processes_dask.process_implementations.cubes.dataset_bridge import (
     dataset_to_virtual_bands,
     restore_dataset_metadata,

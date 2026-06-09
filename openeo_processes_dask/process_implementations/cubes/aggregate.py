@@ -15,9 +15,8 @@ import xarray as xr
 import xvec
 from joblib import Parallel, delayed
 from openeo_pg_parser_networkx.pg_schema import TemporalInterval, TemporalIntervals
-from openeo_processes_dask.process_implementations.cubes.utils import (
-    ensure_raster_cube,
-)
+
+from openeo_processes_dask.process_implementations.cubes.utils import ensure_raster_cube
 from openeo_processes_dask.process_implementations.data_model import (
     RasterCube,
     VectorCube,

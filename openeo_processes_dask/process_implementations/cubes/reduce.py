@@ -2,14 +2,13 @@ from typing import Callable, Optional
 
 import numpy as np
 import xarray as xr
+
 from openeo_processes_dask.process_implementations.cubes.dataset_bridge import (
     dataset_to_virtual_bands,
     restore_dataset_metadata,
     virtual_bands_to_dataset,
 )
-from openeo_processes_dask.process_implementations.cubes.utils import (
-    ensure_raster_cube,
-)
+from openeo_processes_dask.process_implementations.cubes.utils import ensure_raster_cube
 from openeo_processes_dask.process_implementations.data_model import RasterCube
 from openeo_processes_dask.process_implementations.exceptions import (
     DimensionNotAvailable,

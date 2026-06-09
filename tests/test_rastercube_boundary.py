@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import xarray as xr
+
 from openeo_processes_dask.process_implementations.cubes._filter import (
     filter_bands,
     filter_bbox,

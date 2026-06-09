@@ -1,16 +1,13 @@
 import xarray as xr
-from openeo_processes_dask.process_implementations.cubes.utils import (
-    ensure_raster_cube,
-)
+
+from openeo_processes_dask.process_implementations.cubes.utils import ensure_raster_cube
 from openeo_processes_dask.process_implementations.data_model import RasterCube
 from openeo_processes_dask.process_implementations.exceptions import (
     BandExists,
     NirBandAmbiguous,
     RedBandAmbiguous,
 )
-from openeo_processes_dask.process_implementations.math import (
-    normalized_difference,
-)
+from openeo_processes_dask.process_implementations.math import normalized_difference
 
 __all__ = ["ndvi"]
 

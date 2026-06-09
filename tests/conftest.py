@@ -15,9 +15,10 @@ from openeo_pg_parser_networkx.pg_schema import (
     BoundingBox,
     TemporalInterval,
 )
+from shapely.geometry import Polygon
+
 from openeo_processes_dask.process_implementations.core import process
 from openeo_processes_dask.process_implementations.data_model import VectorCube
-from shapely.geometry import Polygon
 
 logger = logging.getLogger(__name__)
 
@@ -117,9 +118,7 @@ def process_registry() -> ProcessRegistry:
     standard_processes = [
         func
         for _, func in inspect.getmembers(
-            importlib.import_module(
-                "openeo_processes_dask.process_implementations"
-            ),
+            importlib.import_module("openeo_processes_dask.process_implementations"),
             inspect.isfunction,
         )
     ]

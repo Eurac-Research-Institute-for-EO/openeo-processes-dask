@@ -11,9 +11,7 @@ import shapely
 import xarray as xr
 from xarray.core import dtypes
 
-from openeo_processes_dask.process_implementations.cubes.utils import (
-    ensure_raster_cube,
-)
+from openeo_processes_dask.process_implementations.cubes.utils import ensure_raster_cube
 from openeo_processes_dask.process_implementations.data_model import (
     RasterCube,
     VectorCube,

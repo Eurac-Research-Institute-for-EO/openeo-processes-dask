@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
 import xarray as xr
+
 from openeo_processes_dask.process_implementations.cubes.indices import ndvi
 from openeo_processes_dask.process_implementations.exceptions import (
     BandExists,
     NirBandAmbiguous,
     RedBandAmbiguous,
 )
-
 from tests.mockdata import create_fake_rastercube
 
 

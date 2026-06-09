@@ -20,10 +20,7 @@ RASTER_DIR = (
     PROJECT_ROOT / "openeo_processes_dask" / "process_implementations" / "cubes"
 )
 DATA_MODEL = (
-    PROJECT_ROOT
-    / "openeo_processes_dask"
-    / "process_implementations"
-    / "data_model.py"
+    PROJECT_ROOT / "openeo_processes_dask" / "process_implementations" / "data_model.py"
 )
 
 ALLOWLIST = [

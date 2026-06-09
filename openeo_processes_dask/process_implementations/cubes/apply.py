@@ -16,9 +16,7 @@ from openeo_processes_dask.process_implementations.cubes.dataset_bridge import (
 from openeo_processes_dask.process_implementations.cubes.mask_polygon import (
     mask_polygon,
 )
-from openeo_processes_dask.process_implementations.cubes.utils import (
-    ensure_raster_cube,
-)
+from openeo_processes_dask.process_implementations.cubes.utils import ensure_raster_cube
 from openeo_processes_dask.process_implementations.data_model import (
     RasterCube,
     VectorCube,

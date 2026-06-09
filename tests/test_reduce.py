@@ -5,20 +5,21 @@ import numpy as np
 import pytest
 import xarray as xr
 from openeo_pg_parser_networkx.pg_schema import ParameterReference
+
 from openeo_processes_dask.process_implementations.cubes.reduce import (
     reduce_dimension,
     reduce_spatial,
 )
-
 from tests.general_checks import general_output_checks
 from tests.mockdata import create_fake_rastercube
 
-
 try:
     import rqadeforestation as _rqadeforestation  # noqa: F401
+
     _has_rqa = True
 except ImportError:
     _has_rqa = False
+
 
 @pytest.mark.parametrize("size", [(30, 30, 20, 4)])
 @pytest.mark.parametrize("dtype", [np.float32])
