@@ -14,8 +14,18 @@ from tests.general_checks import general_output_checks
 from tests.mockdata import create_fake_rastercube
 
 
+try:
+    import rqadeforestation as _rqadeforestation  # noqa: F401
+    _has_rqa = True
+except ImportError:
+    _has_rqa = False
+
 @pytest.mark.parametrize("size", [(30, 30, 20, 4)])
 @pytest.mark.parametrize("dtype", [np.float32])
+@pytest.mark.skipif(
+    not _has_rqa,
+    reason="rqadeforestation optional dependency not installed",
+)
 def test_reduce_rqa(
     temporal_interval, bounding_box, random_raster_data, process_registry
 ):

@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 import numpy as np
+import odc.geo.xr
 import odc.stac
 import planetary_computer as pc
 import pyproj
@@ -263,9 +264,14 @@ def load_stac(
         stack = xr.combine_by_coords(
             datasets, join="exact", combine_attrs="drop_conflicts"
         )
-        if not stack.rio.crs:
-            stack.rio.write_crs(reference_system, inplace=True)
-        stack = stack.to_dataarray(dim="bands")
+        if reference_system is not None:
+            try:
+                stack = odc.geo.xr.assign_crs(stack, crs=reference_system)
+            except Exception:
+                pass
+        if bands is not None and stack.data_vars:
+            present = [b for b in bands if b in stack.data_vars]
+            stack = stack[present]
     else:
         # If at least one band has the nodata field set, we have to apply it at loading time
         apply_nodata = True
@@ -293,11 +299,9 @@ def load_stac(
         # Note: unfortunately, converting the dataset to a dataarray, casts all the data types to the same
 
         if bands is not None:
-            stack = odc.stac.load(items, bands=bands, chunks={}, **kwargs).to_dataarray(
-                dim="bands"
-            )
+            stack = odc.stac.load(items, bands=bands, chunks={}, **kwargs)
         else:
-            stack = odc.stac.load(items, chunks={}, **kwargs).to_dataarray(dim="bands")
+            stack = odc.stac.load(items, chunks={}, **kwargs)
 
     if spatial_extent is not None:
         stack = filter_bbox(stack, spatial_extent)

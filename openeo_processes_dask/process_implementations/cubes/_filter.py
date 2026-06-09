@@ -10,6 +10,9 @@ import pyproj
 import shapely
 import xarray as xr
 from openeo_pg_parser_networkx.pg_schema import BoundingBox, TemporalInterval
+from openeo_processes_dask.process_implementations.cubes.mask_polygon import (
+    mask_polygon,
+)
 from openeo_processes_dask.process_implementations.cubes.utils import (
     ensure_raster_cube,
 )
@@ -31,6 +34,7 @@ __all__ = [
     "filter_temporal",
     "filter_bands",
     "filter_bbox",
+    "filter_spatial",
 ]
 
 
@@ -225,6 +229,30 @@ def filter_bbox(data: RasterCube, extent: BoundingBox) -> RasterCube:
         aoi = data.loc[{x_dim: x_slice}]
 
     return aoi
+
+
+def filter_spatial(data: RasterCube, geometries) -> RasterCube:
+    ensure_raster_cube(data, "filter_spatial")
+    if "type" in geometries and geometries["type"] == "FeatureCollection":
+        gdf = gpd.GeoDataFrame.from_features(geometries, DEFAULT_CRS)
+    elif "type" in geometries and geometries["type"] in ["Polygon"]:
+        polygon = shapely.geometry.Polygon(geometries["coordinates"][0])
+        gdf = gpd.GeoDataFrame(geometry=[polygon])
+        gdf.crs = DEFAULT_CRS
+    else:
+        raise ValueError(
+            "Unsupported or missing geometry type. Expected 'Polygon' or 'FeatureCollection'."
+        )
+
+    bbox = gdf.total_bounds
+    spatial_extent = BoundingBox(
+        west=bbox[0], east=bbox[2], south=bbox[1], north=bbox[3]
+    )
+
+    data = filter_bbox(data, spatial_extent)
+    data = mask_polygon(data, geometries)
+
+    return data
 
 
 def _reproject_bbox(extent: BoundingBox, target_crs: str) -> BoundingBox:

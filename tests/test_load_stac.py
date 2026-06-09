@@ -24,7 +24,8 @@ def test_load_stac(bounding_box, random_raster_data, temporal_interval):
     assert output_cube.openeo is not None
     assert len(output_cube[output_cube.openeo.x_dim]) > 0
     assert len(output_cube[output_cube.openeo.y_dim]) > 0
-    assert len(output_cube[output_cube.openeo.band_dims[0]]) > 0
+    assert "red" in output_cube.data_vars
+    assert len(output_cube.openeo.temporal_dims) > 0
     assert len(output_cube[output_cube.openeo.temporal_dims[0]]) > 0
 
     input_cube = create_fake_rastercube(
@@ -33,9 +34,10 @@ def test_load_stac(bounding_box, random_raster_data, temporal_interval):
         temporal_extent=temporal_interval,
         bands=["B02", "B03", "B04", "B08", "SCL"],
         backend="dask",
+        as_dataset=True,
     )
 
-    input_cube.to_dataset(dim="bands").to_zarr("./tests/data/s2_l2a_zarr_sample.zarr")
+    input_cube.to_zarr("./tests/data/s2_l2a_zarr_sample.zarr")
 
     url = "./tests/data/stac/s2_l2a_zarr_sample.json"
     output_cube = load_stac(
@@ -46,7 +48,8 @@ def test_load_stac(bounding_box, random_raster_data, temporal_interval):
     assert output_cube.openeo is not None
     assert len(output_cube[output_cube.openeo.x_dim]) > 0
     assert len(output_cube[output_cube.openeo.y_dim]) > 0
-    assert len(output_cube[output_cube.openeo.band_dims[0]]) > 0
+    assert "B04" in output_cube.data_vars
+    assert len(output_cube.openeo.temporal_dims) > 0
     assert len(output_cube[output_cube.openeo.temporal_dims[0]]) > 0
     shutil.rmtree("./tests/data/s2_l2a_zarr_sample.zarr")
 

@@ -1,17 +1,23 @@
 import copy
 import gc
+import json
 import logging
 from typing import Callable, Optional, Union
+from urllib.request import urlopen
 
 import dask.array as da
 import geopandas as gpd
 import numpy as np
+import odc.geo.xr
 import pandas as pd
 import shapely
 import xarray as xr
 import xvec
 from joblib import Parallel, delayed
 from openeo_pg_parser_networkx.pg_schema import TemporalInterval, TemporalIntervals
+from openeo_processes_dask.process_implementations.cubes.utils import (
+    ensure_raster_cube,
+)
 from openeo_processes_dask.process_implementations.data_model import (
     RasterCube,
     VectorCube,
@@ -21,7 +27,7 @@ from openeo_processes_dask.process_implementations.exceptions import (
     TooManyDimensions,
 )
 
-__all__ = ["aggregate_temporal", "aggregate_temporal_period"]
+__all__ = ["aggregate_temporal", "aggregate_temporal_period", "aggregate_spatial"]
 
 logger = logging.getLogger(__name__)
 
@@ -253,3 +259,76 @@ def aggregate_temporal_period(
         return aggregate_temporal(
             data=data, intervals=intervals, reducer=reducer, labels=labels
         )
+
+
+def aggregate_spatial(
+    data: RasterCube,
+    geometries,
+    reducer: Callable,
+    chunk_size: int = 2,
+) -> VectorCube:
+    ensure_raster_cube(data, "aggregate_spatial")
+    x_dim = data.openeo.x_dim
+    y_dim = data.openeo.y_dim
+    DEFAULT_CRS = "EPSG:4326"
+
+    if isinstance(geometries, str):
+        response = urlopen(geometries)
+        geometries = json.loads(response.read())
+
+    if isinstance(geometries, dict):
+        if "features" in geometries:
+            for feature in geometries["features"]:
+                if "properties" not in feature:
+                    feature["properties"] = {}
+                elif feature["properties"] is None:
+                    feature["properties"] = {}
+            if isinstance(geometries.get("crs", {}), dict):
+                DEFAULT_CRS = (
+                    geometries.get("crs", {})
+                    .get("properties", {})
+                    .get("name", DEFAULT_CRS)
+                )
+            else:
+                DEFAULT_CRS = int(geometries.get("crs", {}))
+            logger.info(f"CRS in geometries: {DEFAULT_CRS}.")
+
+        if "type" in geometries and geometries["type"] == "FeatureCollection":
+            gdf = gpd.GeoDataFrame.from_features(geometries, crs=DEFAULT_CRS)
+        elif "type" in geometries and geometries["type"] in ["Polygon"]:
+            polygon = shapely.geometry.Polygon(geometries["coordinates"][0])
+            gdf = gpd.GeoDataFrame(geometry=[polygon])
+            gdf.crs = DEFAULT_CRS
+
+    if isinstance(geometries, xr.Dataset):
+        if hasattr(geometries, "xvec"):
+            gdf = geometries.xvec.to_geodataframe()
+
+    if isinstance(geometries, gpd.GeoDataFrame):
+        gdf = geometries
+
+    try:
+        odc_crs = data.odc.crs
+        if odc_crs is not None:
+            data_crs = str(odc_crs)
+        else:
+            data_crs = data.attrs.get("crs", DEFAULT_CRS)
+    except Exception as e:
+        raise Exception(f"Not possible to estimate the input data projection! {e}")
+
+    gdf = gdf.to_crs(data_crs)
+
+    geometries_list = list(gdf.geometry.values)
+
+    positional_parameters = {"data": 0}
+
+    vec_cube = data.xvec.zonal_stats(
+        geometries_list,
+        x_coords=x_dim,
+        y_coords=y_dim,
+        method="iterate",
+        stats=reducer,
+        positional_parameters=positional_parameters,
+    )
+
+    return vec_cube
