@@ -3,11 +3,11 @@ from typing import Callable, Optional
 import numpy as np
 import odc.geo.xr
 import xarray as xr
-from openeo_processes_dask_slim.process_implementations.cubes.utils import (
+from openeo_processes_dask.process_implementations.cubes.utils import (
     ensure_raster_cube,
 )
-from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
-from openeo_processes_dask_slim.process_implementations.exceptions import (
+from openeo_processes_dask.process_implementations.data_model import RasterCube
+from openeo_processes_dask.process_implementations.exceptions import (
     OverlapResolverMissing,
 )
 

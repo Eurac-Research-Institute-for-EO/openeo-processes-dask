@@ -3,20 +3,20 @@ from typing import Callable
 
 import numpy as np
 import xarray as xr
-from openeo_processes_dask_slim.process_implementations.cubes.resample import (
+from openeo_processes_dask.process_implementations.cubes.resample import (
     resample_cube_spatial,
 )
-from openeo_processes_dask_slim.process_implementations.cubes.utils import (
+from openeo_processes_dask.process_implementations.cubes.utils import (
     ensure_raster_cube,
     notnull,
 )
-from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
-from openeo_processes_dask_slim.process_implementations.exceptions import (
+from openeo_processes_dask.process_implementations.data_model import RasterCube
+from openeo_processes_dask.process_implementations.exceptions import (
     DimensionLabelCountMismatch,
     DimensionMismatch,
     LabelMismatch,
 )
-from openeo_processes_dask_slim.process_implementations.logic import _not
+from openeo_processes_dask.process_implementations.logic import _not
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ __all__ = ["mask"]
 
 
 def _mask_dataset(data: xr.Dataset, mask: RasterCube, replacement) -> xr.Dataset:
-    from openeo_processes_dask_slim.process_implementations.cubes.resample import (
+    from openeo_processes_dask.process_implementations.cubes.resample import (
         resample_cube_spatial,
     )
 
@@ -35,7 +35,7 @@ def _mask_dataset(data: xr.Dataset, mask: RasterCube, replacement) -> xr.Dataset
         if not set(data_temporal_dims) == set(mask_temporal_dims):
             check_temporal_labels = False
             if len(mask_temporal_dims) != 0:
-                from openeo_processes_dask_slim.process_implementations.exceptions import (
+                from openeo_processes_dask.process_implementations.exceptions import (
                     DimensionMismatch,
                 )
 
@@ -45,7 +45,7 @@ def _mask_dataset(data: xr.Dataset, mask: RasterCube, replacement) -> xr.Dataset
         if check_temporal_labels:
             for n in data_temporal_dims:
                 if not all(data[n].values == mask[n].values):
-                    from openeo_processes_dask_slim.process_implementations.exceptions import (
+                    from openeo_processes_dask.process_implementations.exceptions import (
                         LabelMismatch,
                     )
 
@@ -57,7 +57,7 @@ def _mask_dataset(data: xr.Dataset, mask: RasterCube, replacement) -> xr.Dataset
         mask_spatial_dims = mask.openeo.spatial_dims
         apply_resample = False
         if not set(data_spatial_dims) == set(mask_spatial_dims):
-            from openeo_processes_dask_slim.process_implementations.exceptions import (
+            from openeo_processes_dask.process_implementations.exceptions import (
                 DimensionMismatch,
             )
 

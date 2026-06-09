@@ -8,8 +8,8 @@ import dask
 import dask.array as da
 import numpy as np
 import pytest
-from openeo_processes_dask_slim.process_implementations.cubes.apply import apply_kernel
-from openeo_processes_dask_slim.process_implementations.cubes.mask import mask
+from openeo_processes_dask.process_implementations.cubes.apply import apply_kernel
+from openeo_processes_dask.process_implementations.cubes.mask import mask
 
 
 @pytest.fixture

@@ -38,12 +38,12 @@ def ensure_raster_cube(data, process_name=None):
         raise TypeError(msg)
 
 
-from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
+from openeo_processes_dask.process_implementations.cubes.dataset_bridge import (
     _capture_var_metadata as _capture_var_metadata,
 )
-from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
+from openeo_processes_dask.process_implementations.cubes.dataset_bridge import (
     _detect_band_permutation as _detect_band_permutation,
 )
-from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
+from openeo_processes_dask.process_implementations.cubes.dataset_bridge import (
     _restore_var_metadata as _restore_var_metadata,
 )

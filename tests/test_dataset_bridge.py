@@ -3,7 +3,7 @@ import odc.geo.xr
 import pandas as pd
 import pytest
 import xarray as xr
-from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
+from openeo_processes_dask.process_implementations.cubes.dataset_bridge import (
     capture_dataset_metadata,
     dataset_to_virtual_bands,
     detect_band_permutation,

@@ -5,11 +5,11 @@ import xarray as xr
 from openeo.udf import UdfData
 from openeo.udf.run_code import run_udf_code
 from openeo.udf.xarraydatacube import XarrayDataCube
-from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
+from openeo_processes_dask.process_implementations.cubes.dataset_bridge import (
     dataset_to_virtual_bands,
     virtual_bands_to_dataset,
 )
-from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
+from openeo_processes_dask.process_implementations.data_model import RasterCube
 
 __all__ = ["run_udf"]
 
