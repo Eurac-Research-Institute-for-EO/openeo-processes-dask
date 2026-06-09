@@ -100,7 +100,7 @@ xarray + Dask + raster/geospatial libraries
 
 ### Important distinction
 
-`dims` and dimension metadata are semantic.  
+`dims` and dimension metadata are semantic.
 `coords` are implementation details unless they represent openEO dimension labels, spatial indexes, temporal labels, CRS/transform metadata, or are explicitly required by a process.
 
 Do not treat arbitrary xarray auxiliary coordinates as openEO dimensions.
