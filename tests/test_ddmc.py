@@ -9,15 +9,14 @@ from openeo_pg_parser_networkx.pg_schema import (
     TemporalInterval,
 )
 
-from openeo_processes_dask.process_implementations.cubes.load import load_stac
-from openeo_processes_dask.process_implementations.cubes.reduce import (
+from openeo_processes_dask_slim.process_implementations.cubes.reduce import (
     reduce_dimension,
     reduce_spatial,
 )
-from openeo_processes_dask.process_implementations.exceptions import (
+from openeo_processes_dask_slim.process_implementations.exceptions import (
     ArrayElementNotAvailable,
 )
-from openeo_processes_dask.process_implementations.experimental.ddmc import ddmc
+from openeo_processes_dask_slim.process_implementations.experimental.ddmc import ddmc
 from tests.general_checks import general_output_checks
 from tests.mockdata import create_fake_rastercube
 
@@ -37,8 +36,9 @@ def test_ddmc_instance_dims(
 
     data = ddmc(input_cube)
 
-    assert isinstance(data, xr.DataArray)
-    assert set(input_cube.dims) == set(data.dims)
+    assert isinstance(data, xr.Dataset)
+    assert set(data.data_vars) == {"midcl", "dc", "lowcl"}
+    assert set(input_cube.dims).issubset(set(next(iter(data.data_vars.values())).dims))
 
 
 @pytest.mark.parametrize("size", [(30, 30, 20, 5)])
@@ -54,8 +54,11 @@ def test_ddmc_target_band(
         backend="dask",
     )
 
-    data_band = ddmc(data=input_cube, target_band="ddmc")
-    assert "ddmc" in data_band.dims
+    data_band = ddmc(data=input_cube)
+    assert isinstance(data_band, xr.Dataset)
+    assert "midcl" in data_band.data_vars
+    assert "dc" in data_band.data_vars
+    assert "lowcl" in data_band.data_vars
 
 
 @pytest.mark.parametrize("size", [(30, 30, 20, 5)])

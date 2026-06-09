@@ -1,6 +1,8 @@
+import warnings
 from typing import List, Optional, Union
 
 import dask
+import dask.array as da
 import dask.distributed
 import dask_geopandas
 import geopandas as gpd
@@ -8,10 +10,10 @@ import numpy as np
 import xarray as xr
 from xgboost.core import Booster
 
-from openeo_processes_dask.process_implementations.cubes.experimental import (
+from openeo_processes_dask_slim.process_implementations.cubes.experimental import (
     load_vector_cube,
 )
-from openeo_processes_dask.process_implementations.data_model import (
+from openeo_processes_dask_slim.process_implementations.data_model import (
     RasterCube,
     VectorCube,
 )
@@ -25,15 +27,10 @@ def fit_regr_random_forest(
     num_trees: int = 100,
     max_variables: Optional[Union[int, str]] = None,
     predictors_vars: Optional[list[str]] = None,
-    target_var: Optional[str] = None,
+    target_var: str = None,
     **kwargs,
 ) -> Booster:
-    try:
-        from xgboost import dask as dxgb
-    except ImportError:
-        raise ImportError(
-            "xgboost[dask] is required for fit_regr_random_forest."
-        ) from None
+    from xgboost import dask as dxgb
 
     def load_geometries(geometries):
         if isinstance(geometries, str):
@@ -129,18 +126,72 @@ def predict_random_forest(
     data: RasterCube,
     model: Booster,
     axis: int = -1,
-    context: Optional[dict] = None,
+    context: dict = None,
 ) -> RasterCube:
-    try:
-        from xgboost import dask as dxgb
-    except ImportError:
-        raise ImportError(
-            "xgboost[dask] is required for predict_random_forest."
-        ) from None
+    from xgboost import dask as dxgb
 
     if not model:
         if isinstance(context, dict) and "model" in context:
             model = context["model"]
+
+    if isinstance(data, xr.Dataset):
+        feature_names = model.feature_names
+        data_vars = list(data.data_vars)
+
+        if feature_names is not None:
+            data_var_set = set(data_vars)
+            feature_set = set(feature_names)
+            missing = feature_set - data_var_set
+            extra = data_var_set - feature_set
+            if missing:
+                raise Exception(
+                    f"Model expects features {list(missing)}, "
+                    f"but they are not present in the data cube. "
+                    f"Available variables: {data_vars}."
+                )
+            if extra:
+                raise Exception(
+                    f"Data cube contains variables {list(extra)} "
+                    f"that are not in the model's feature set {feature_names}. "
+                    f"Use filter_bands to select only the expected features."
+                )
+
+            if len(data_vars) != len(feature_names):
+                raise Exception(
+                    f"Number of data variables ({len(data_vars)}) does not match "
+                    f"number of features the model was trained with ({len(feature_names)})."
+                )
+
+            ordered_vars = feature_names
+            n_features = len(feature_names)
+        else:
+            if isinstance(context, dict) and "feature_order" in context:
+                ordered_vars = context["feature_order"]
+            else:
+                ordered_vars = data_vars
+                warnings.warn(
+                    "Model has no feature_names and context['feature_order'] is not set. "
+                    "Using Dataset variable order. This may lead to silent prediction errors "
+                    "if the order does not match the training order."
+                )
+            n_features = len(ordered_vars)
+
+        sample_var = data[ordered_vars[0]]
+        stacks = [data[name].data for name in ordered_vars]
+        stacked = da.stack(stacks, axis=0)
+        if axis < 0:
+            axis = stacked.ndim + axis
+        X = da.moveaxis(stacked, 0, axis)
+        X_flat = da.moveaxis(X, axis, 0).reshape((n_features, -1)).transpose()
+        client = dask.distributed.default_client()
+        preds_flat = dxgb.inplace_predict(client, model, X_flat)
+        output_shape = list(sample_var.shape)
+        result = xr.Dataset(
+            {"result": (sample_var.dims, preds_flat.reshape(tuple(output_shape)))},
+            coords=data.coords,
+            attrs=data.attrs,
+        )
+        return result
 
     n_features = len(model.feature_names)
     if n_features != data.shape[axis]:

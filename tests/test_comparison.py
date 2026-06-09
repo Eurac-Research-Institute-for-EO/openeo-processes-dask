@@ -8,11 +8,12 @@ import pytest
 import xarray as xr
 from openeo_pg_parser_networkx.pg_schema import ParameterReference
 
-from openeo_processes_dask.process_implementations import merge_cubes
-from openeo_processes_dask.process_implementations.comparison import *
-from openeo_processes_dask.process_implementations.cubes.apply import apply
-from openeo_processes_dask.process_implementations.cubes.reduce import reduce_dimension
-from openeo_processes_dask.process_implementations.utils import get_scalar_type
+from openeo_processes_dask_slim.process_implementations import merge_cubes
+from openeo_processes_dask_slim.process_implementations.comparison import *
+from openeo_processes_dask_slim.process_implementations.cubes.apply import apply
+from openeo_processes_dask_slim.process_implementations.cubes.reduce import (
+    reduce_dimension,
+)
 from tests.general_checks import assert_numpy_equals_dask_numpy, general_output_checks
 from tests.mockdata import create_fake_rastercube
 
@@ -66,20 +67,6 @@ def test_is_inf(value, expected, is_dask):
 
     if is_dask:
         assert hasattr(output, "dask")
-
-
-@pytest.mark.parametrize(
-    "value, expected",
-    [
-        (1, np.int64),
-        ("test", np.str_),
-        (None, np.object_),
-        (np.array([1, 2]), np.int64),
-        (da.from_array(np.array([1, 2])), np.int64),
-    ],
-)
-def test_get_scalar_type(value, expected):
-    assert get_scalar_type(value) is expected
 
 
 @pytest.mark.parametrize(
@@ -200,7 +187,7 @@ def test_eq_mask():
     data = np.array([[10, 10], [10, 0]])
     data = da.from_array(data)
     m = eq(data, 10)
-    assert (m == data / 10).all().compute()  # add .compute()
+    assert (m == data / 10).all()
 
 
 @pytest.mark.parametrize(
@@ -227,6 +214,7 @@ def test_is(temporal_interval, bounding_box, random_raster_data, process_registr
         temporal_extent=temporal_interval,
         bands=["B02", "B03", "B04", "B08"],
         backend="dask",
+        as_dataset=True,
     )
 
     _process = partial(
@@ -240,7 +228,8 @@ def test_is(temporal_interval, bounding_box, random_raster_data, process_registr
         verify_attrs=True,
         verify_crs=True,
     )
-    assert isinstance(output_cube.data, dask.array.Array)
+    for var in output_cube.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
     xr.testing.assert_equal(output_cube, xr.ones_like(input_cube))
 
     _process = partial(
@@ -254,7 +243,8 @@ def test_is(temporal_interval, bounding_box, random_raster_data, process_registr
         verify_attrs=True,
         verify_crs=True,
     )
-    assert isinstance(output_cube.data, dask.array.Array)
+    for var in output_cube.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
     xr.testing.assert_equal(output_cube, xr.zeros_like(input_cube))
 
 
@@ -268,6 +258,7 @@ def test_compare(temporal_interval, bounding_box, random_raster_data, process_re
         temporal_extent=temporal_interval,
         bands=["B02", "B03", "B04", "B08"],
         backend="dask",
+        as_dataset=True,
     )
 
     _process = partial(
@@ -282,7 +273,8 @@ def test_compare(temporal_interval, bounding_box, random_raster_data, process_re
         verify_attrs=True,
         verify_crs=True,
     )
-    assert isinstance(output_cube.data, dask.array.Array)
+    for var in output_cube.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
     xr.testing.assert_equal(output_cube, xr.zeros_like(input_cube))
 
     _process = partial(
@@ -297,7 +289,8 @@ def test_compare(temporal_interval, bounding_box, random_raster_data, process_re
         verify_attrs=True,
         verify_crs=True,
     )
-    assert isinstance(output_cube.data, dask.array.Array)
+    for var in output_cube.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
     xr.testing.assert_equal(output_cube, xr.ones_like(input_cube))
 
     _process = partial(
@@ -318,7 +311,8 @@ def test_compare(temporal_interval, bounding_box, random_raster_data, process_re
         verify_attrs=True,
         verify_crs=True,
     )
-    assert isinstance(output_cube_gt.data, dask.array.Array)
+    for var in output_cube_gt.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
     xr.testing.assert_equal(output_cube_gt, output_cube_gte)
 
     _process = partial(
@@ -339,7 +333,8 @@ def test_compare(temporal_interval, bounding_box, random_raster_data, process_re
         verify_attrs=True,
         verify_crs=True,
     )
-    assert isinstance(output_cube_lt.data, dask.array.Array)
+    for var in output_cube_lt.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
     xr.testing.assert_equal(output_cube_lt, output_cube_lte)
 
     _process = partial(
@@ -370,7 +365,8 @@ def test_compare(temporal_interval, bounding_box, random_raster_data, process_re
         verify_attrs=True,
         verify_crs=True,
     )
-    assert isinstance(output_cube.data, dask.array.Array)
+    for var in output_cube.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
     xr.testing.assert_equal(output_cube, output_cube_b2)
 
 
@@ -402,7 +398,8 @@ def test_merge_cubes_eq(
         ),
     )
 
-    assert isinstance(merged_cube_eq.data, dask.array.Array)
+    for var in merged_cube_eq.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
 
     # the values are all False = 0
     merged_cube_neq = merge_cubes(
@@ -415,7 +412,8 @@ def test_merge_cubes_eq(
         ),
     )
 
-    assert isinstance(merged_cube_neq.data, dask.array.Array)
+    for var in merged_cube_neq.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
     # check if True (1) == False (0) + 1
     xr.testing.assert_equal(merged_cube_eq, merged_cube_neq + 1)
 
@@ -430,6 +428,7 @@ def test_merge_cubes_eq(
         ),
     )
 
-    assert isinstance(merged_cube_lt.data, dask.array.Array)
+    for var in merged_cube_lt.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
     # check for data lt data, should be same as check for data not eq to data
     xr.testing.assert_equal(merged_cube_lt, merged_cube_neq)

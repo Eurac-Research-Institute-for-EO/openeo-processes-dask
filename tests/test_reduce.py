@@ -1,11 +1,12 @@
 from functools import partial
 
+import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
 from openeo_pg_parser_networkx.pg_schema import ParameterReference
 
-from openeo_processes_dask.process_implementations.cubes.reduce import (
+from openeo_processes_dask_slim.process_implementations.cubes.reduce import (
     reduce_dimension,
     reduce_spatial,
 )
@@ -20,40 +21,38 @@ def test_reduce_rqa(
 ):
     import os
 
-    from openeo_processes_dask.process_implementations.arrays import array_apply
-    from openeo_processes_dask.process_implementations.cubes.apply import (
+    from openeo_processes_dask_slim.process_implementations.arrays import array_apply
+    from openeo_processes_dask_slim.process_implementations.cubes.apply import (
         apply_dimension,
     )
+    from openeo_processes_dask_slim.process_implementations.experimental import (
+        rqadeforestation,
+    )
 
-    try:
-        from openeo_processes_dask.process_implementations.experimental import (
-            rqadeforestation,
-        )
+    print(os.system("pwd"))
 
-        input_cube = create_fake_rastercube(
-            data=random_raster_data,
-            spatial_extent=bounding_box,
-            temporal_extent=temporal_interval,
-            bands=["B02", "B03", "B04", "B08"],
-            backend="dask",
-        )
+    input_cube = create_fake_rastercube(
+        data=random_raster_data,
+        spatial_extent=bounding_box,
+        temporal_extent=temporal_interval,
+        bands=["B02", "B03", "B04", "B08"],
+        backend="dask",
+        as_dataset=True,
+    )
 
-        _process = partial(
-            process_registry["rqadeforestation"].implementation,
-            data=ParameterReference(from_parameter="data"),
-            threshold=0.5,
-        )
+    _process = partial(
+        process_registry["rqadeforestation"].implementation,
+        data=ParameterReference(from_parameter="data"),
+        threshold=0.5,
+    )
+    output_cube = reduce_dimension(data=input_cube, reducer=_process, dimension="t")
 
-        output_cube = reduce_dimension(data=input_cube, reducer=_process, dimension="t")
-
-        general_output_checks(
-            input_cube=input_cube,
-            output_cube=output_cube,
-            verify_attrs=False,
-            verify_crs=True,
-        )
-    except ImportError:
-        assert True
+    general_output_checks(
+        input_cube=input_cube,
+        output_cube=output_cube,
+        verify_attrs=False,
+        verify_crs=True,
+    )
 
 
 @pytest.mark.parametrize("size", [(30, 30, 20, 4)])
@@ -67,6 +66,7 @@ def test_reduce_dimension(
         temporal_extent=temporal_interval,
         bands=["B02", "B03", "B04", "B08"],
         backend="dask",
+        as_dataset=True,
     )
 
     _process = partial(
@@ -116,3 +116,28 @@ def test_reduce_spatial(
     )
 
     xr.testing.assert_equal(output_cube, input_cube.sum(dim=["x", "y"]))
+
+
+@pytest.mark.parametrize("size", [(30, 30, 20, 4)])
+@pytest.mark.parametrize("dtype", [np.float32])
+def test_reduce_spatial_dataset(
+    temporal_interval, bounding_box, random_raster_data, process_registry
+):
+    input_cube = create_fake_rastercube(
+        data=random_raster_data,
+        spatial_extent=bounding_box,
+        temporal_extent=temporal_interval,
+        bands=["B02", "B03", "B04", "B08"],
+        backend="dask",
+        as_dataset=True,
+    )
+    _process = partial(
+        process_registry["mean"].implementation,
+        ignore_nodata=True,
+        data=ParameterReference(from_parameter="data"),
+    )
+    output_cube = reduce_spatial(data=input_cube, reducer=_process)
+    assert isinstance(output_cube, xr.Dataset)
+    assert set(output_cube.data_vars) == {"B02", "B03", "B04", "B08"}
+    for var in output_cube.data_vars.values():
+        assert isinstance(var.data, da.Array)

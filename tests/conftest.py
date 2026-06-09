@@ -17,8 +17,8 @@ from openeo_pg_parser_networkx.pg_schema import (
 )
 from shapely.geometry import Polygon
 
-from openeo_processes_dask.process_implementations.core import process
-from openeo_processes_dask.process_implementations.data_model import VectorCube
+from openeo_processes_dask_slim.process_implementations.core import process
+from openeo_processes_dask_slim.process_implementations.data_model import VectorCube
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,19 @@ def dask_client():
     client = Client()
     yield client
     client.shutdown()
+
+
+@pytest.fixture(scope="module")
+def xgboost_client():
+    from dask.distributed import Client
+
+    client = Client(
+        n_workers=1,
+        threads_per_worker=1,
+        dashboard_address=":0",
+    )
+    yield client
+    client.close(timeout=10)
 
 
 def _random_raster_data(size, dtype, seed=42):
@@ -105,12 +118,14 @@ def process_registry() -> ProcessRegistry:
     standard_processes = [
         func
         for _, func in inspect.getmembers(
-            importlib.import_module("openeo_processes_dask.process_implementations"),
+            importlib.import_module(
+                "openeo_processes_dask_slim.process_implementations"
+            ),
             inspect.isfunction,
         )
     ]
 
-    specs_module = importlib.import_module("openeo_processes_dask.specs")
+    specs_module = importlib.import_module("openeo_processes_dask_slim.specs")
 
     specs = {}
     for func in standard_processes:

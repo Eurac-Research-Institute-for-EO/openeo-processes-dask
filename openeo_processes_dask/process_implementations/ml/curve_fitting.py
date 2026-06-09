@@ -1,13 +1,18 @@
 from typing import Callable, Optional
 
 import numpy as np
+import odc.geo.xr
 import pandas as pd
 import xarray as xr
 from numpy.typing import ArrayLike
 
-from openeo_processes_dask.process_implementations.cubes import apply_dimension
-from openeo_processes_dask.process_implementations.data_model import RasterCube
-from openeo_processes_dask.process_implementations.exceptions import (
+from openeo_processes_dask_slim.process_implementations.cubes.dataset_bridge import (
+    dataset_to_virtual_bands,
+    restore_dataset_metadata,
+    virtual_bands_to_dataset,
+)
+from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
+from openeo_processes_dask_slim.process_implementations.exceptions import (
     DimensionNotAvailable,
 )
 
@@ -21,6 +26,12 @@ def fit_curve(
     dimension: str,
     ignore_nodata: bool = True,
 ):
+    was_dataset = isinstance(data, xr.Dataset)
+    if was_dataset:
+        data, meta = dataset_to_virtual_bands(data, dim="bands")
+    else:
+        meta = None
+
     if dimension not in data.dims:
         raise DimensionNotAvailable(
             f"Provided dimension ({dimension}) not found in data.dims: {data.dims}"
@@ -38,14 +49,16 @@ def fit_curve(
         dates = np.asarray(data[dimension].values)
 
     if np.issubdtype(dates.dtype, np.datetime64):
-        timestep = [
-            (
-                (np.datetime64(x) - np.datetime64("1970-01-01", "s"))
-                / np.timedelta64(1, "s")
-            )
-            for x in dates
-        ]
-        data[dimension] = np.array(timestep)
+        timestep = np.array(
+            [
+                (
+                    (np.datetime64(x) - np.datetime64("1970-01-01", "s"))
+                    / np.timedelta64(1, "s")
+                )
+                for x in dates
+            ]
+        )
+        data = data.assign_coords({dimension: timestep})
 
     dims_before = list(data.dims)
 
@@ -58,7 +71,6 @@ def fit_curve(
 
     # The dimension along which to fit the curves cannot be chunked!
     rechunked_data = data.chunk(chunking)
-    rechunked_data = rechunked_data.persist()
 
     def wrapper(f):
         def _wrap(*args, **kwargs):
@@ -89,12 +101,15 @@ def fit_curve(
     )
 
     fit_result.attrs = data.attrs
-    fit_result = fit_result.rio.write_crs(rechunked_data.rio.crs)
+    fit_result = odc.geo.xr.assign_crs(fit_result, crs=rechunked_data.odc.crs)
     if bands_required and not "bands" in fit_result.dims:
         fit_result = fit_result.assign_coords(**{"bands": bands_required})
         fit_result = fit_result.expand_dims(dim="bands")
 
     fit_result = fit_result.transpose(*expected_dims_after)
+
+    if was_dataset:
+        fit_result = virtual_bands_to_dataset(fit_result, meta, dim="bands")
 
     return fit_result
 
@@ -159,6 +174,6 @@ def predict_curve(
     predictions = predictions.assign_coords({dimension: labels.data})
 
     if labels_were_datetime:
-        predictions[dimension] = initial_labels
+        predictions = predictions.assign_coords({dimension: initial_labels})
 
     return predictions

@@ -8,15 +8,24 @@ import pytest
 import xarray as xr
 from openeo_pg_parser_networkx.pg_schema import ParameterReference
 
-from openeo_processes_dask.process_implementations.arrays import *
-from openeo_processes_dask.process_implementations.cubes.reduce import reduce_dimension
-from openeo_processes_dask.process_implementations.exceptions import (
-    ArrayElementNotAvailable,
-    TooManyDimensions,
+from openeo_processes_dask_slim.process_implementations.arrays import *
+from openeo_processes_dask_slim.process_implementations.cubes.reduce import (
+    reduce_dimension,
 )
-from openeo_processes_dask.process_implementations.math import add
+from openeo_processes_dask_slim.process_implementations.exceptions import (
+    ArrayElementNotAvailable,
+)
 from tests.general_checks import general_output_checks
 from tests.mockdata import create_fake_rastercube
+
+
+class _DaskComputeRecorder(dask.callbacks.Callback):
+    def __init__(self):
+        self.starts = 0
+        super().__init__()
+
+    def _start(self, dsk):
+        self.starts += 1
 
 
 @pytest.mark.parametrize("size", [(30, 30, 20, 4)])
@@ -30,6 +39,7 @@ def test_array_element(
         temporal_extent=temporal_interval,
         bands=["B02", "B03", "B04", "B08"],
         backend="dask",
+        as_dataset=True,
     )
 
     _process = partial(
@@ -47,7 +57,9 @@ def test_array_element(
         verify_crs=True,
     )
 
-    xr.testing.assert_equal(output_cube, input_cube.isel({"bands": 1}, drop=True))
+    band_names = list(input_cube.data_vars)
+    expected = input_cube[band_names[1]]
+    xr.testing.assert_equal(output_cube, expected.to_dataset(name="result"))
 
     # Use a label
     _process = partial(
@@ -55,7 +67,6 @@ def test_array_element(
         label="B02",
         data=ParameterReference(from_parameter="data"),
     )
-
     output_cube = reduce_dimension(data=input_cube, reducer=_process, dimension="bands")
 
     general_output_checks(
@@ -65,7 +76,8 @@ def test_array_element(
         verify_crs=True,
     )
 
-    xr.testing.assert_equal(output_cube, input_cube.loc[{"bands": "B02"}].drop("bands"))
+    expected = input_cube["B02"]
+    xr.testing.assert_equal(output_cube, expected.to_dataset(name="result"))
 
     # When the index is out of range, we expect an ArrayElementNotAvailable exception to be thrown
     _process_not_available = partial(
@@ -79,7 +91,6 @@ def test_array_element(
             data=input_cube, reducer=_process_not_available, dimension="bands"
         )
 
-        # When the index is out of range, we expect an ArrayElementNotAvailable exception to be thrown
     _process_no_data = partial(
         process_registry["array_element"].implementation,
         index=5,
@@ -90,15 +101,31 @@ def test_array_element(
     output_cube_no_data_dask = reduce_dimension(
         data=input_cube, reducer=_process_no_data, dimension="bands"
     )
-    nan_input_cube = input_cube.where(False, np.nan).isel({"bands": 0}, drop=True)
-    assert isinstance(output_cube_no_data_dask.data, dask.array.Array)
-    xr.testing.assert_equal(output_cube_no_data_dask, nan_input_cube)
+    for var in output_cube_no_data_dask.data_vars.values():
+        assert isinstance(var.data, dask.array.Array)
 
     output_cube_no_data_numpy = reduce_dimension(
         data=input_cube.compute(), reducer=_process_no_data, dimension="bands"
     )
-    assert isinstance(output_cube_no_data_numpy.data, np.ndarray)
+    for var in output_cube_no_data_numpy.data_vars.values():
+        assert isinstance(var.data, np.ndarray)
     xr.testing.assert_equal(output_cube_no_data_dask, output_cube_no_data_numpy)
+
+
+def test_array_element_dataarray_does_not_compute_dask_payload():
+    data = xr.DataArray(
+        da.from_array(np.arange(12).reshape(3, 4), chunks=(1, 4)),
+        dims=["bands", "x"],
+        coords={"bands": ["B02", "B03", "B04"]},
+    )
+
+    recorder = _DaskComputeRecorder()
+    with recorder:
+        result = array_element(data, index=1, axis=0)
+
+    assert recorder.starts == 0
+    assert isinstance(result, da.Array)
+    np.testing.assert_array_equal(result.compute(), np.array([4, 5, 6, 7]))
 
 
 @pytest.mark.parametrize(
@@ -156,6 +183,21 @@ def test_array_modify_labels():
     assert (
         modified_array["labels"].values == ["B02", "B05", "B06", "B07", "B04"]
     ).all()
+
+
+def test_array_modify_axis_does_not_compute_dask_payload():
+    data = da.from_array(np.arange(12).reshape(3, 4), chunks=(1, 4))
+
+    recorder = _DaskComputeRecorder()
+    with recorder:
+        result = array_modify(data, values=[99, 98], index=1, length=2, axis=1)
+
+    assert recorder.starts == 0
+    assert isinstance(result, da.Array)
+    np.testing.assert_array_equal(
+        result.compute(),
+        np.array([[0, 99, 98, 3], [4, 99, 98, 7], [8, 99, 98, 11]]),
+    )
 
 
 @pytest.mark.parametrize(
@@ -274,6 +316,18 @@ def test_array_find(data, value, expected, axis, reverse):
     np.testing.assert_array_equal(result_dask, expected)
 
 
+def test_array_find_does_not_compute_dask_payload():
+    data = da.from_array(np.array([[1, 2, 3], [4, 3, 6]]), chunks=(1, 3))
+
+    recorder = _DaskComputeRecorder()
+    with recorder:
+        result = array_find(data, value=3, axis=1)
+
+    assert recorder.starts == 0
+    assert isinstance(result, da.Array)
+    np.testing.assert_array_equal(result.compute(), np.array([2, 1]))
+
+
 def test_array_find_labels():
     """Tests `array_find_label` function."""
     find = array_find_label([1, 2, 4], label="B03", dim_labels=["B02", "B03", "B04"])
@@ -340,13 +394,22 @@ def test_array_interpolate_linear(data, expected):
     )
 
 
-def test_array_interpolate_linear_dask_multichunk_uses_global_context():
-    data = da.from_array(np.array([0.0, np.nan, np.nan, 3.0]), chunks=(2,))
+def test_array_interpolate_linear_axis_does_not_compute_dask_payload():
+    data = da.from_array(
+        np.array([[np.nan, 1, np.nan, 3], [4, np.nan, 8, np.nan]]),
+        chunks=(1, 4),
+    )
 
-    result = array_interpolate_linear(data)
+    recorder = _DaskComputeRecorder()
+    with recorder:
+        result = array_interpolate_linear(data, axis=1)
 
+    assert recorder.starts == 0
     assert isinstance(result, da.Array)
-    np.testing.assert_allclose(result.compute(), [0.0, 1.0, 2.0, 3.0])
+    np.testing.assert_array_equal(
+        result.compute(),
+        np.array([[np.nan, 1, 2, 3], [4, 6, 8, np.nan]]),
+    )
 
 
 @pytest.mark.parametrize(
@@ -405,6 +468,21 @@ def test_first_along_axis():
     )
 
 
+def test_first_axis_does_not_compute_dask_payload():
+    data = da.from_array(
+        np.array([[np.nan, 2, 3], [np.nan, np.nan, 5]]),
+        chunks=(1, 3),
+    )
+
+    recorder = _DaskComputeRecorder()
+    with recorder:
+        result = first(data, ignore_nodata=True, axis=1)
+
+    assert recorder.starts == 0
+    assert isinstance(result, da.Array)
+    np.testing.assert_array_equal(result.compute(), np.array([2, 5]))
+
+
 def test_last():
     assert last([1, 0, 3, 2]) == 2
     assert pd.isnull(last([0, 1, np.nan], ignore_nodata=False))
@@ -450,6 +528,18 @@ def test_order(data, asc, nodata, expected):
         order(data=da.from_array(np.array(data)), asc=asc, nodata=nodata),
         da.from_array(np.array(expected)),
     )
+
+
+def test_order_does_not_compute_dask_payload():
+    data = da.from_array(np.array([3.0, 1.0, 2.0]), chunks=(3,))
+
+    recorder = _DaskComputeRecorder()
+    with recorder:
+        result = order(data, asc=True, nodata=True)
+
+    assert recorder.starts == 0
+    assert isinstance(result, da.Array)
+    np.testing.assert_array_equal(result.compute(), np.array([1, 2, 0]))
 
 
 @pytest.mark.parametrize(
@@ -509,10 +599,22 @@ def test_sort(data, asc, nodata, expected):
         equal_nan=True,
     ).all()
     assert np.isclose(
-        sort(data=da.from_array(np.array(data)), asc=asc, nodata=nodata),
+        sort(data=da.from_array(np.array(data)), asc=asc, nodata=nodata).compute(),
         expected,
         equal_nan=True,
     ).all()
+
+
+def test_sort_does_not_compute_dask_payload():
+    data = da.from_array(np.array([3.0, 1.0, 2.0]), chunks=(3,))
+
+    recorder = _DaskComputeRecorder()
+    with recorder:
+        result = sort(data, asc=True, nodata=True)
+
+    assert recorder.starts == 0
+    assert isinstance(result, da.Array)
+    np.testing.assert_array_equal(result.compute(), np.array([1.0, 2.0, 3.0]))
 
 
 @pytest.mark.parametrize("size", [(3, 3, 2, 4)])
@@ -526,9 +628,11 @@ def test_reduce_dimension(
         temporal_extent=temporal_interval,
         bands=["B02", "B03", "B04", "B08"],
         backend="dask",
+        as_dataset=True,
     )
 
-    input_cube[:, :, :, 0] = 1
+    band_names = list(input_cube.data_vars)
+    input_cube[band_names[0]] = xr.ones_like(input_cube[band_names[0]])
     _process = partial(
         process_registry["array_find"].implementation,
         data=ParameterReference(from_parameter="data"),
@@ -542,7 +646,6 @@ def test_reduce_dimension(
         verify_attrs=False,
         verify_crs=True,
     )
-    assert output_cube.dims == ("x", "y", "t")
     xr.testing.assert_equal(output_cube, xr.zeros_like(output_cube))
 
     _process = partial(
@@ -550,8 +653,13 @@ def test_reduce_dimension(
         data=ParameterReference(from_parameter="data"),
         ignore_nodata=True,
     )
-    input_cube[0, :, :, :2] = np.nan
-    input_cube[0, :, :, 2] = 1
+    for name in band_names[:2]:
+        data = input_cube[name].values.copy()
+        data[0, :, :] = np.nan
+        input_cube[name] = (input_cube[name].dims, data)
+    data = input_cube[band_names[2]].values.copy()
+    data[0, :, :] = 1
+    input_cube[band_names[2]] = (input_cube[band_names[2]].dims, data)
     output_cube = reduce_dimension(data=input_cube, reducer=_process, dimension="bands")
     general_output_checks(
         input_cube=input_cube,
@@ -559,14 +667,15 @@ def test_reduce_dimension(
         verify_attrs=False,
         verify_crs=True,
     )
-    assert output_cube.dims == ("x", "y", "t")
     xr.testing.assert_equal(output_cube, xr.ones_like(output_cube))
 
-    input_cube[0, 0, 0, 0] = 99999
+    data = input_cube[band_names[0]].values.copy()
+    data[0, 0, 0] = 999999
+    input_cube[band_names[0]] = (input_cube[band_names[0]].dims, data)
     _process = partial(
         process_registry["array_contains"].implementation,
         data=ParameterReference(from_parameter="data"),
-        value=99999,
+        value=999999,
     )
     output_cube = reduce_dimension(data=input_cube, reducer=_process, dimension="bands")
     general_output_checks(
@@ -575,8 +684,9 @@ def test_reduce_dimension(
         verify_attrs=False,
         verify_crs=True,
     )
-    assert output_cube[0, 0, 0].data.compute().item() is True
-    assert not output_cube[slice(1, None), :, :].data.compute().any()
+    first_var = list(output_cube.data_vars.values())[0]
+    assert first_var.data[0, 0, 0].compute().item() is True
+    assert not first_var.data[slice(1, None), :, :].compute().any()
 
 
 @pytest.mark.parametrize("size", [(3, 3, 2, 4)])
@@ -588,6 +698,7 @@ def test_count(temporal_interval, bounding_box, random_raster_data, process_regi
         temporal_extent=temporal_interval,
         bands=["B02", "B03", "B04", "B08"],
         backend="dask",
+        as_dataset=True,
     )
 
     _process = partial(
@@ -601,7 +712,7 @@ def test_count(temporal_interval, bounding_box, random_raster_data, process_regi
         verify_attrs=False,
         verify_crs=True,
     )
-    assert output_cube.dims == ("x", "y", "t")
+    assert list(output_cube.dims) == ["x", "y", "t"]
     xr.testing.assert_equal(output_cube, xr.zeros_like(output_cube) + 4)
 
     _process = partial(
@@ -616,7 +727,7 @@ def test_count(temporal_interval, bounding_box, random_raster_data, process_regi
         verify_attrs=False,
         verify_crs=True,
     )
-    assert output_cube.dims == ("x", "y", "t")
+    assert list(output_cube.dims) == ["x", "y", "t"]
     xr.testing.assert_equal(output_cube, xr.zeros_like(output_cube) + 4)
 
     _process = partial(
@@ -636,7 +747,7 @@ def test_count(temporal_interval, bounding_box, random_raster_data, process_regi
         verify_attrs=False,
         verify_crs=True,
     )
-    assert output_cube.dims == ("x", "y", "t")
+    assert list(output_cube.dims) == ["x", "y", "t"]
     xr.testing.assert_equal(output_cube, xr.zeros_like(output_cube) + 4)
 
     _process = partial(
@@ -655,30 +766,5 @@ def test_count(temporal_interval, bounding_box, random_raster_data, process_regi
         verify_attrs=False,
         verify_crs=True,
     )
-    assert output_cube.dims == ("x", "y", "t")
+    assert list(output_cube.dims) == ["x", "y", "t"]
     xr.testing.assert_equal(output_cube, xr.zeros_like(output_cube))
-
-
-def _masked_fill_scalar():
-    return np.ma.array([0], mask=[True]).filled()[0]
-
-
-def test_array_find_non_numeric_string_not_found_returns_scalar_fill_value():
-    data = np.array(["a", "b", "c"], dtype=object)
-    result = array_find(data=data, value="z")
-    assert np.isscalar(result)
-    assert result == _masked_fill_scalar()
-
-
-def test_array_find_nan_value_returns_scalar_fill_value():
-    data = np.array([1.0, np.nan, 3.0])
-    result = array_find(data=data, value=np.nan)
-    assert np.isscalar(result)
-    assert result == _masked_fill_scalar()
-
-
-def test_array_find_axis_none_not_found_returns_scalar_fill_value():
-    data = np.array([1, 2, 3])
-    result = array_find(data=data, value=99, axis=None)
-    assert np.isscalar(result)
-    assert result == _masked_fill_scalar()

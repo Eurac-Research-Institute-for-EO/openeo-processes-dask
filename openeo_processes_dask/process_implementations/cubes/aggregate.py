@@ -7,23 +7,22 @@ import dask.array as da
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import rasterio
 import shapely
 import xarray as xr
 import xvec
 from joblib import Parallel, delayed
 from openeo_pg_parser_networkx.pg_schema import TemporalInterval, TemporalIntervals
 
-from openeo_processes_dask.process_implementations.data_model import (
+from openeo_processes_dask_slim.process_implementations.data_model import (
     RasterCube,
     VectorCube,
 )
-from openeo_processes_dask.process_implementations.exceptions import (
+from openeo_processes_dask_slim.process_implementations.exceptions import (
     DimensionNotAvailable,
     TooManyDimensions,
 )
 
-__all__ = ["aggregate_temporal", "aggregate_temporal_period", "aggregate_spatial"]
+__all__ = ["aggregate_temporal", "aggregate_temporal_period"]
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +89,15 @@ def aggregate_temporal(
     intervals_flat = np.unique(intervals_flat)
     data_copy = copy.deepcopy(data)
     t_coords = data_copy[t].values.astype(str)
-    data_copy[t] = np.array(t_coords, dtype="datetime64[s]").astype(float)
+    data_copy = data_copy.assign_coords(
+        {t: np.array(t_coords, dtype="datetime64[s]").astype(float)}
+    )
     grouped_data = data_copy.groupby_bins(t, bins=intervals_flat)
     positional_parameters = {"data": 0}
     groups = grouped_data.reduce(
         reducer, keep_attrs=True, positional_parameters=positional_parameters
     )
-    groups[t + "_bins"] = labels_nans
+    groups = groups.assign_coords({t + "_bins": labels_nans})
     data_agg_temp = groups.sel({t + "_bins": labels})
     data_agg_temp = data_agg_temp.rename({t + "_bins": t})
 
@@ -253,73 +254,3 @@ def aggregate_temporal_period(
         return aggregate_temporal(
             data=data, intervals=intervals, reducer=reducer, labels=labels
         )
-
-
-def aggregate_spatial(
-    data: RasterCube,
-    geometries,
-    reducer: Callable,
-    chunk_size: int = 2,
-) -> VectorCube:
-    x_dim = data.openeo.x_dim
-    y_dim = data.openeo.y_dim
-    DEFAULT_CRS = "EPSG:4326"
-
-    if isinstance(geometries, str):
-        # Allow importing geometries from url (e.g. github raw)
-        import json
-        from urllib.request import urlopen
-
-        response = urlopen(geometries)
-        geometries = json.loads(response.read())
-
-    if isinstance(geometries, dict):
-        # Get crs from geometries
-        if "features" in geometries:
-            for feature in geometries["features"]:
-                if "properties" not in feature:
-                    feature["properties"] = {}
-                elif feature["properties"] is None:
-                    feature["properties"] = {}
-            if isinstance(geometries.get("crs", {}), dict):
-                DEFAULT_CRS = (
-                    geometries.get("crs", {})
-                    .get("properties", {})
-                    .get("name", DEFAULT_CRS)
-                )
-            else:
-                DEFAULT_CRS = int(geometries.get("crs", {}))
-            logger.info(f"CRS in geometries: {DEFAULT_CRS}.")
-
-        if "type" in geometries and geometries["type"] == "FeatureCollection":
-            gdf = gpd.GeoDataFrame.from_features(geometries, crs=DEFAULT_CRS)
-        elif "type" in geometries and geometries["type"] in ["Polygon"]:
-            polygon = shapely.geometry.Polygon(geometries["coordinates"][0])
-            gdf = gpd.GeoDataFrame(geometry=[polygon])
-            gdf.crs = DEFAULT_CRS
-
-    if isinstance(geometries, xr.Dataset):
-        if hasattr(geometries, "xvec"):
-            gdf = geometries.xvec.to_geodataframe()
-
-    if isinstance(geometries, gpd.GeoDataFrame):
-        gdf = geometries
-
-    gdf = gdf.to_crs(data.rio.crs)
-
-    # Convert to list of geometries for better xvec handling
-    geometries_list = list(gdf.geometry.values)
-
-    positional_parameters = {"data": 0}
-
-    # Use the list of geometries directly, addressing potential issues with xvec's zonal_stats expecting list input
-    vec_cube = data.xvec.zonal_stats(
-        geometries_list,  # Now passing list instead of numpy array
-        x_coords=x_dim,
-        y_coords=y_dim,
-        method="iterate",
-        stats=reducer,
-        positional_parameters=positional_parameters,
-    )
-
-    return vec_cube

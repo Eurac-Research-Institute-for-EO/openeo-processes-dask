@@ -6,8 +6,11 @@ import xarray as xr
 from numpy.typing import ArrayLike
 from openeo_pg_parser_networkx.pg_schema import *
 
-from openeo_processes_dask.process_implementations.data_model import RasterCube
-from openeo_processes_dask.process_implementations.exceptions import (
+from openeo_processes_dask_slim.process_implementations.cubes.utils import (
+    ensure_raster_cube,
+)
+from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
+from openeo_processes_dask_slim.process_implementations.exceptions import (
     DimensionLabelCountMismatch,
     DimensionNotAvailable,
 )
@@ -24,6 +27,7 @@ __all__ = [
 
 
 def drop_dimension(data: RasterCube, name: str) -> RasterCube:
+    ensure_raster_cube(data, "drop_dimension")
     if name not in data.dims:
         raise DimensionNotAvailable(
             f"Provided dimension ({name}) not found in data.dims: {data.dims}"
@@ -36,10 +40,11 @@ def drop_dimension(data: RasterCube, name: str) -> RasterCube:
 
 
 def create_data_cube() -> RasterCube:
-    return xr.DataArray()
+    return xr.Dataset()
 
 
 def trim_cube(data) -> RasterCube:
+    ensure_raster_cube(data, "trim_cube")
     for dim in data.dims:
         if (
             dim in data.openeo.temporal_dims
@@ -48,7 +53,12 @@ def trim_cube(data) -> RasterCube:
         ):
             values = data[dim].values
             other_dims = [d for d in data.dims if d != dim]
-            available_data = values[(np.isnan(data)).all(dim=other_dims) == 0]
+            is_nan = xr.ufuncs.isnan(data)
+            all_nan = is_nan.all(dim=other_dims)
+            all_nan_arr = all_nan.to_array()
+            combined = all_nan_arr.all(dim=all_nan_arr.dims[0])
+            available_mask = ~combined.values
+            available_data = values[available_mask]
             if len(available_data) == 0:
                 raise ValueError(f"Data contains NaN values only. ")
             data = data.sel({dim: available_data})
@@ -57,6 +67,10 @@ def trim_cube(data) -> RasterCube:
 
 
 def dimension_labels(data: RasterCube, dimension: str) -> ArrayLike:
+    ensure_raster_cube(data, "dimension_labels")
+    if dimension == "bands":
+        return np.array(list(data.data_vars))
+
     if dimension not in data.dims:
         raise DimensionNotAvailable(
             f"Provided dimension ({dimension}) not found in data.dims: {data.dims}"
@@ -72,30 +86,13 @@ def dimension_labels(data: RasterCube, dimension: str) -> ArrayLike:
 def add_dimension(
     data: RasterCube, name: str, label: str, type: Optional[str] = "other"
 ):
-    """
-    Parameters
-    ----------
-    data : xr.DataArray
-       A data cube to add the dimension to.
-    name : str
-       Name for the dimension.
-    labels : number, str
-       A dimension label.
-    type : str, optional
-       The type of dimension, defaults to other.
-    Returns
-    -------
-    xr.DataArray :
-       The data cube with a newly added dimension. The new dimension has exactly one dimension label.
-       All other dimensions remain unchanged.
-    """
+    ensure_raster_cube(data, "add_dimension")
     if name in data.dims:
         raise Exception(
             f"DimensionExists - A dimension with the specified name already exists. The existing dimensions are: {data.dims}"
         )
     data_e = data.assign_coords(**{name: label})
     data_e = data_e.expand_dims(name)
-    # Register dimension in the openeo accessor
     data_e.openeo.add_dim_type(name=name, type=type)
     return data_e
 
@@ -105,26 +102,7 @@ def rename_dimension(
     source: str,
     target: str,
 ):
-    """
-    Parameters
-    ----------
-    data : xr.DataArray
-       A data cube.
-    source : str
-       The current name of the dimension.
-       Fails with a DimensionNotAvailable exception if the specified dimension does not exist.
-    labels : number, str
-       A new Name for the dimension.
-       Fails with a DimensionExists exception if a dimension with the specified name exists.
-    Returns
-    -------
-    xr.DataArray :
-       A data cube with the same dimensions,
-       but the name of one of the dimensions changes.
-       The old name can not be referred to any longer.
-       The dimension properties (name, type, labels, reference system and resolution)
-       remain unchanged.
-    """
+    ensure_raster_cube(data, "rename_dimension")
     if source not in data.dims:
         raise DimensionNotAvailable(
             f"Provided dimension ({source}) not found in data.dims: {data.dims}"
@@ -153,6 +131,31 @@ def rename_labels(
     target: list[Union[str, float]],
     source: Optional[list[Union[str, float]]] = [],
 ):
+    ensure_raster_cube(data, "rename_labels")
+    if dimension == "bands":
+        if len(source) > 0:
+            if len(source) != len(target):
+                raise Exception(
+                    f"LabelMismatch - The number of labels in the parameters `source` and `target` don't match."
+                )
+            for s in source:
+                if s not in data.data_vars:
+                    raise Exception(
+                        f"LabelNotAvailable - A label with the specified name does not exist."
+                    )
+            mapping = dict(zip(source, target))
+        else:
+            if len(target) != len(data.data_vars):
+                raise Exception(
+                    f"LabelMismatch - The number of labels in the parameters `source` and `target` don't match."
+                )
+            mapping = dict(zip(data.data_vars, target))
+        renamed = {}
+        for var_name in data.data_vars:
+            new_name = mapping.get(var_name, var_name)
+            renamed[new_name] = data[var_name]
+        return xr.Dataset(renamed, coords=data.coords, attrs=data.attrs)
+
     data_rename = copy.deepcopy(data)
     if dimension not in data_rename.dims:
         raise DimensionNotAvailable(
@@ -164,11 +167,8 @@ def rename_labels(
                 f"LabelMismatch - The number of labels in the parameters `source` and `target` don't match."
             )
 
-    time = False
-    if dimension in data.openeo.temporal_dims:
-        time = True
-
     source_labels = data_rename[dimension].values
+    time = np.issubdtype(source_labels.dtype, np.datetime64)
     if time:
         source_labels = np.array(source_labels, dtype="datetime64[s]")
     elif np.issubdtype(source_labels.dtype, np.datetime64):

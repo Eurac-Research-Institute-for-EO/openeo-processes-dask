@@ -3,13 +3,12 @@ from typing import Optional, Union
 
 import numpy as np
 import odc.geo.xr
-import rioxarray  # needs to be imported to set .rio accessor on xarray objects.
 import xarray as xr
 from odc.geo.geobox import resolution_from_affine
 from pyproj.crs import CRS, CRSError
 
-from openeo_processes_dask.process_implementations.data_model import RasterCube
-from openeo_processes_dask.process_implementations.exceptions import (
+from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
+from openeo_processes_dask_slim.process_implementations.exceptions import (
     DimensionMissing,
     OpenEOException,
 )
@@ -82,7 +81,7 @@ def resample_spatial(
     data_cp = data.transpose(..., data.openeo.y_dim, data.openeo.x_dim)
 
     if projection is None:
-        projection = data_cp.rio.crs
+        projection = data_cp.odc.crs
 
     try:
         projection = CRS.from_user_input(projection)
@@ -106,7 +105,7 @@ def resample_spatial(
 
     reprojected = reprojected.transpose(*dim_order)
 
-    reprojected.attrs["crs"] = data_cp.rio.crs
+    reprojected.attrs["crs"] = data_cp.odc.crs
 
     return reprojected
 
@@ -158,7 +157,7 @@ def resample_cube_spatial(
         target_reordered.odc.geobox, resampling=method
     )
 
-    resampled_data.rio.write_crs(target_reordered.rio.crs, inplace=True)
+    resampled_data = odc.geo.xr.assign_crs(resampled_data, crs=target_reordered.odc.crs)
 
     try:
         # odc.reproject renames the coordinates according to the geobox, this undoes that.
@@ -193,16 +192,21 @@ def resample_cube_temporal(data, target, dimension=None, valid_within=None):
             raise Exception("DimensionNotAvailable")
         target = target.rename({target_time: dimension})
     index = []
-    for d in target[dimension].values:
-        difference = np.abs(d - data[dimension].values)
+    target_coords = target[dimension].values
+    data_coords = data[dimension].values
+    for d in target_coords:
+        difference = np.abs(d - data_coords)
         nearest = np.argwhere(difference == np.min(difference))
-        # Flatten to handle all shapes consistently
-        nearest = nearest.flatten()
-        index.append(int(nearest[0]))  # always take first (earliest timestamp)
+        # The rare case of ties is resolved by choosing the earlier timestamps. (index 0)
+        if np.shape(nearest) == (2, 1):
+            nearest = nearest[0]
+        if np.shape(nearest) == (1, 2):
+            nearest = nearest[:, 0]
+        index.append(int(nearest[0, 0]))
     times_at_target_time = data[dimension].values[index]
     new_data = data.loc[{dimension: times_at_target_time}]
     filter_values = new_data[dimension].values
-    new_data[dimension] = target[dimension].values
+    new_data = new_data.assign_coords({dimension: target[dimension].values})
     # valid_within
     if valid_within is None:
         new_data = new_data

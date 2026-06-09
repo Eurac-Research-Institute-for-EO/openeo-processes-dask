@@ -4,11 +4,11 @@ import dask.array as da
 import numpy as np
 from numpy.typing import ArrayLike
 
-from openeo_processes_dask.process_implementations.cubes.utils import (
+from openeo_processes_dask_slim.process_implementations.cubes.utils import (
     _is_dask_array,
     notnull,
 )
-from openeo_processes_dask.process_implementations.utils import get_scalar_type
+from openeo_processes_dask_slim.process_implementations.utils import get_scalar_type
 
 __all__ = [
     "is_infinite",
@@ -73,13 +73,10 @@ def eq(
                 y = np.char.lower(y)
         ar_eq = x == y
 
-    elif np.issubdtype(x_dtype, np.flexible) and np.issubdtype(y_dtype, np.flexible):
-        ar_eq = x == y
     else:
-        # Types are incompatible, return False (but preserve array shape)
         if hasattr(x, "shape"):
             return np.zeros_like(x, dtype=bool)
-        elif hasattr(y, "shape"):
+        if hasattr(y, "shape"):
             return np.zeros_like(y, dtype=bool)
         return False
 

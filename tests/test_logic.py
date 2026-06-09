@@ -6,9 +6,9 @@ import pytest
 import xarray as xr
 from openeo_pg_parser_networkx.pg_schema import ParameterReference
 
-from openeo_processes_dask.process_implementations.cubes import *
-from openeo_processes_dask.process_implementations.cubes.utils import isnull
-from openeo_processes_dask.process_implementations.logic import *
+from openeo_processes_dask_slim.process_implementations.cubes import *
+from openeo_processes_dask_slim.process_implementations.cubes.utils import isnull
+from openeo_processes_dask_slim.process_implementations.logic import *
 from tests.general_checks import general_output_checks
 from tests.mockdata import create_fake_rastercube
 
@@ -126,11 +126,11 @@ def test_reduce_dimension(
         temporal_extent=temporal_interval,
         bands=["B02", "B03", "B04", "B08"],
         backend="dask",
+        as_dataset=True,
     )
 
-    input_cube[
-        :, :, :, 0
-    ] = True  # set all values in the first band to True - any() over bands will return True (ones_like)
+    band_names = list(input_cube.data_vars)
+    input_cube[band_names[0]] = xr.ones_like(input_cube[band_names[0]])
     _process = partial(
         process_registry["any"].implementation,
         ignore_nodata=False,
@@ -143,13 +143,11 @@ def test_reduce_dimension(
         verify_attrs=False,
         verify_crs=True,
     )
-    assert output_cube.dims == ("x", "y", "t")
-    assert isinstance(output_cube.data, da.Array)
+    for var in output_cube.data_vars.values():
+        assert isinstance(var.data, da.Array)
     xr.testing.assert_equal(output_cube, xr.ones_like(output_cube))
 
-    input_cube[
-        :, :, :, 1
-    ] = False  # set all values in the second band to False - all() over bands will return False (zeros_like)
+    input_cube[band_names[1]] = xr.zeros_like(input_cube[band_names[1]])
     _process = partial(
         process_registry["all"].implementation,
         ignore_nodata=False,
@@ -162,8 +160,8 @@ def test_reduce_dimension(
         verify_attrs=False,
         verify_crs=True,
     )
-    assert output_cube.dims == ("x", "y", "t")
-    assert isinstance(output_cube.data, da.Array)
+    for var in output_cube.data_vars.values():
+        assert isinstance(var.data, da.Array)
     xr.testing.assert_equal(output_cube, xr.zeros_like(output_cube))
 
 
@@ -180,10 +178,11 @@ def test_merge_cubes(
         backend="dask",
     )
 
-    cube_1 = origin_cube.sel({"bands": "B01"})
-    cube_2 = origin_cube.sel({"bands": "B02"})
-    cube_1[:, :, :] = True
-    cube_2[:, :, :] = False
+    cube_1 = origin_cube.copy()
+    cube_2 = origin_cube.copy()
+    for var in cube_1.data_vars:
+        cube_1[var] = xr.full_like(cube_1[var], True)
+        cube_2[var] = xr.full_like(cube_2[var], False)
 
     overlap_resolver = partial(
         process_registry["and"].implementation,
@@ -191,8 +190,9 @@ def test_merge_cubes(
         y=ParameterReference(from_parameter="y"),
     )
     merged_cube = merge_cubes(cube_1, cube_2, overlap_resolver=overlap_resolver)
-    assert merged_cube.dims == ("x", "y", "t")
-    assert isinstance(merged_cube.data, da.Array)
+    assert list(merged_cube.dims) == ["x", "y", "t"]
+    for var in merged_cube.data_vars.values():
+        assert isinstance(var.data, da.Array)
     xr.testing.assert_equal(
         merged_cube, xr.zeros_like(merged_cube)
     )  # and(True, False) == False (zeros_like)
@@ -203,8 +203,9 @@ def test_merge_cubes(
         y=ParameterReference(from_parameter="y"),
     )
     merged_cube = merge_cubes(cube_1, cube_2, overlap_resolver=overlap_resolver)
-    assert merged_cube.dims == ("x", "y", "t")
-    assert isinstance(merged_cube.data, da.Array)
+    assert list(merged_cube.dims) == ["x", "y", "t"]
+    for var in merged_cube.data_vars.values():
+        assert isinstance(var.data, da.Array)
     xr.testing.assert_equal(
         merged_cube, xr.ones_like(merged_cube)
     )  # or(True, False) == True (ones_like)
@@ -215,8 +216,9 @@ def test_merge_cubes(
         y=ParameterReference(from_parameter="y"),
     )
     merged_cube = merge_cubes(cube_1, cube_2, overlap_resolver=overlap_resolver)
-    assert merged_cube.dims == ("x", "y", "t")
-    assert isinstance(merged_cube.data, da.Array)
+    assert list(merged_cube.dims) == ["x", "y", "t"]
+    for var in merged_cube.data_vars.values():
+        assert isinstance(var.data, da.Array)
     xr.testing.assert_equal(
         merged_cube, xr.ones_like(merged_cube)
     )  # xor(True, False) == True (ones_like)
@@ -231,16 +233,21 @@ def test_apply(temporal_interval, bounding_box, random_raster_data, process_regi
         temporal_extent=temporal_interval,
         bands=["B02", "B03", "B04", "B08"],
         backend="dask",
+        as_dataset=True,
     )
-    input_cube[:, :, :, :2] = True
-    input_cube[:, :, :, 2:] = False
+    band_names = list(input_cube.data_vars)
+    for name in band_names[:2]:
+        input_cube[name] = xr.ones_like(input_cube[name])
+    for name in band_names[2:]:
+        input_cube[name] = xr.zeros_like(input_cube[name])
 
     _process = partial(
         process_registry["not"].implementation, x=ParameterReference(from_parameter="x")
     )
     output_cube = apply(data=input_cube, process=_process)
     expected_result = xr.zeros_like(input_cube)
-    expected_result[:, :, :, 2:] = True
+    for name in band_names[2:]:
+        expected_result[name] = xr.ones_like(expected_result[name])
     general_output_checks(
         input_cube=input_cube,
         output_cube=output_cube,
@@ -248,7 +255,8 @@ def test_apply(temporal_interval, bounding_box, random_raster_data, process_regi
         verify_crs=True,
         expected_results=(expected_result),
     )
-    assert isinstance(output_cube.data, da.Array)
+    for var in output_cube.data_vars.values():
+        assert isinstance(var.data, da.Array)
     xr.testing.assert_equal(output_cube, expected_result)
 
     _process = partial(
@@ -265,5 +273,6 @@ def test_apply(temporal_interval, bounding_box, random_raster_data, process_regi
         verify_crs=True,
         expected_results=(xr.ones_like(input_cube)),
     )
-    assert isinstance(output_cube.data, da.Array)
+    for var in output_cube.data_vars.values():
+        assert isinstance(var.data, da.Array)
     xr.testing.assert_equal(output_cube, xr.ones_like(input_cube))

@@ -7,19 +7,16 @@ import dask.array as da
 import geopandas as gpd
 import numpy as np
 import pyproj
-import rasterio
-import rioxarray
 import shapely
 import xarray as xr
 from openeo_pg_parser_networkx.pg_schema import BoundingBox, TemporalInterval
 
-from openeo_processes_dask.process_implementations.cubes.mask_polygon import (
-    mask_polygon,
+from openeo_processes_dask_slim.process_implementations.cubes.utils import (
+    ensure_raster_cube,
 )
-from openeo_processes_dask.process_implementations.data_model import RasterCube
-from openeo_processes_dask.process_implementations.exceptions import (
+from openeo_processes_dask_slim.process_implementations.data_model import RasterCube
+from openeo_processes_dask_slim.process_implementations.exceptions import (
     BandFilterParameterMissing,
-    DimensionMissing,
     DimensionNotAvailable,
     TemporalExtentEmpty,
     TooManyDimensions,
@@ -35,13 +32,13 @@ __all__ = [
     "filter_temporal",
     "filter_bands",
     "filter_bbox",
-    "filter_spatial",
 ]
 
 
 def filter_temporal(
-    data: RasterCube, extent: TemporalInterval, dimension: Optional[str] = None
+    data: RasterCube, extent: TemporalInterval, dimension: str = None
 ) -> RasterCube:
+    ensure_raster_cube(data, "filter_temporal")
     temporal_dims = data.openeo.temporal_dims
 
     if dimension is not None:
@@ -63,7 +60,7 @@ def filter_temporal(
             raise TooManyDimensions(
                 f"The data cube contains multiple temporal dimensions: {temporal_dims}. The parameter `dimension` must be specified."
             )
-    applicable_temporal_dimension = temporal_dims[0]
+        applicable_temporal_dimension = temporal_dims[0]
 
     # This line raises a deprecation warning, which according to this thread
     # will never actually be deprecated:
@@ -109,6 +106,24 @@ def filter_temporal(
 def filter_labels(
     data: RasterCube, condition: Callable, dimension: str, context: Optional[Any] = None
 ) -> RasterCube:
+    ensure_raster_cube(data, "filter_labels")
+    if dimension == "bands":
+        labels = list(data.data_vars)
+        if not context:
+            context = {}
+        positional_parameters = {"x": 0}
+        named_parameters = {"x": labels, "context": context}
+        selected = [
+            name
+            for name in labels
+            if condition(
+                name,
+                positional_parameters=positional_parameters,
+                named_parameters=named_parameters,
+            )
+        ]
+        return data[selected]
+
     if dimension not in data.dims:
         raise DimensionNotAvailable(
             f"Provided dimension ({dimension}) not found in data.dims: {data.dims}"
@@ -130,50 +145,32 @@ def filter_labels(
     return data
 
 
-def filter_bands(data: RasterCube, bands: Optional[list[str]] = None) -> RasterCube:
+def filter_bands(data: RasterCube, bands: list[str] = None) -> RasterCube:
+    ensure_raster_cube(data, "filter_bands")
     if bands is None:
         raise BandFilterParameterMissing(
             "The process `filter_bands` requires the parameters `bands` to be set."
         )
 
-    if len(data.openeo.band_dims) < 1:
-        raise DimensionMissing("A band dimension is missing.")
-    band_dim = data.openeo.band_dims[0]
-
-    try:
-        data = data.sel(**{band_dim: bands})
-    except Exception as e:
+    missing = [b for b in bands if b not in data.data_vars]
+    if missing:
         raise Exception(
-            f"The provided bands: {bands} are not all available in the datacube. Please modify the bands parameter of filter_bands and choose among: {data[band_dim].values}."
+            f"The provided bands: {bands} are not all available in the datacube. Please modify the bands parameter of filter_bands and choose among: {list(data.data_vars)}."
         )
-    return data
-
-
-def filter_spatial(data: RasterCube, geometries) -> RasterCube:
-    if "type" in geometries and geometries["type"] == "FeatureCollection":
-        gdf = gpd.GeoDataFrame.from_features(geometries, DEFAULT_CRS)
-    elif "type" in geometries and geometries["type"] in ["Polygon"]:
-        polygon = shapely.geometry.Polygon(geometries["coordinates"][0])
-        gdf = gpd.GeoDataFrame(geometry=[polygon])
-        gdf.crs = DEFAULT_CRS
-
-    bbox = gdf.total_bounds
-    spatial_extent = BoundingBox(
-        west=bbox[0], east=bbox[2], south=bbox[1], north=bbox[3]
-    )
-
-    data = filter_bbox(data, spatial_extent)
-    data = mask_polygon(data, geometries)
-
-    return data
+    return data[bands]
 
 
 def filter_bbox(data: RasterCube, extent: BoundingBox) -> RasterCube:
+    ensure_raster_cube(data, "filter_bbox")
     try:
-        input_crs = str(data.rio.crs)
+        odc_crs = data.odc.crs
+        if odc_crs is not None:
+            input_crs = str(odc_crs)
+        else:
+            input_crs = data.attrs.get("crs", None)
     except Exception as e:
         raise Exception(f"Not possible to estimate the input data projection! {e}")
-    if not pyproj.crs.CRS(extent.crs).equals(input_crs):
+    if input_crs is not None and not pyproj.crs.CRS(extent.crs).equals(input_crs):
         reprojected_extent = _reproject_bbox(extent, input_crs)
     else:
         reprojected_extent = extent

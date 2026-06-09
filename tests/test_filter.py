@@ -8,9 +8,11 @@ import pytest
 import xarray as xr
 from openeo_pg_parser_networkx.pg_schema import ParameterReference, TemporalInterval
 
-from openeo_processes_dask.process_implementations.cubes._filter import *
-from openeo_processes_dask.process_implementations.cubes.reduce import reduce_dimension
-from openeo_processes_dask.process_implementations.exceptions import (
+from openeo_processes_dask_slim.process_implementations.cubes._filter import *
+from openeo_processes_dask_slim.process_implementations.cubes.reduce import (
+    reduce_dimension,
+)
+from openeo_processes_dask_slim.process_implementations.exceptions import (
     DimensionNotAvailable,
     TemporalExtentEmpty,
 )
@@ -92,7 +94,24 @@ def test_filter_labels(
     )
 
     output_cube = filter_labels(data=input_cube, condition=_process, dimension="bands")
-    assert len(output_cube["bands"]) == 1
+    assert len(list(output_cube.data_vars)) == 1
+
+
+def test_filter_labels_virtual_bands(process_registry):
+    ds = xr.Dataset(
+        {
+            "B02": xr.DataArray(np.ones(2), dims=["x"]),
+            "B03": xr.DataArray(np.ones(2) * 2, dims=["x"]),
+            "B04": xr.DataArray(np.ones(2) * 3, dims=["x"]),
+        }
+    )
+    _process = partial(
+        process_registry["eq"].implementation,
+        y="B04",
+        x=ParameterReference(from_parameter="x"),
+    )
+    result = filter_labels(data=ds, condition=_process, dimension="bands")
+    assert list(result.data_vars) == ["B04"]
 
 
 @pytest.mark.parametrize("size", [(1, 1, 1, 2)])
@@ -108,29 +127,7 @@ def test_filter_bands(temporal_interval, bounding_box, random_raster_data):
 
     output_cube = filter_bands(data=input_cube, bands=["SCL"])
 
-    assert output_cube["bands"].values == "SCL"
-
-
-@pytest.mark.parametrize("size", [(30, 30, 30, 1)])
-@pytest.mark.parametrize("dtype", [np.uint8])
-def test_filter_spatial(
-    temporal_interval,
-    bounding_box,
-    random_raster_data,
-    polygon_geometry_small,
-):
-    input_cube = create_fake_rastercube(
-        data=random_raster_data,
-        spatial_extent=bounding_box,
-        temporal_extent=temporal_interval,
-        bands=["B02"],
-        backend="dask",
-    )
-
-    output_cube = filter_spatial(data=input_cube, geometries=polygon_geometry_small)
-
-    assert len(output_cube.y) < len(input_cube.y)
-    assert len(output_cube.x) < len(input_cube.x)
+    assert list(output_cube.data_vars) == ["SCL"]
 
 
 @pytest.mark.parametrize("size", [(30, 30, 1, 1)])
@@ -148,6 +145,7 @@ def test_filter_bbox(
         temporal_extent=temporal_interval,
         bands=["B02"],
         backend="dask",
+        as_dataset=True,
     )
 
     output_cube = filter_bbox(data=input_cube, extent=bounding_box_small)
@@ -176,3 +174,43 @@ def test_filter_bbox(
 
     with pytest.raises(DimensionNotAvailable):
         filter_bbox(data=output_cube_cube_no_x_y, extent=bounding_box_small)
+
+
+@pytest.mark.parametrize("size", [(30, 30, 30, 4)])
+@pytest.mark.parametrize("dtype", [np.uint8])
+def test_filter_bands_dataset(temporal_interval, bounding_box, random_raster_data):
+    input_cube = create_fake_rastercube(
+        data=random_raster_data,
+        spatial_extent=bounding_box,
+        temporal_extent=temporal_interval,
+        bands=["B02", "B03", "B04", "B08"],
+        backend="dask",
+        as_dataset=True,
+    )
+
+    output_cube = filter_bands(data=input_cube, bands=["B02", "B04"])
+    assert set(output_cube.data_vars) == {"B02", "B04"}
+
+    with pytest.raises(Exception):
+        filter_bands(data=input_cube, bands=["nonexistent"])
+
+
+@pytest.mark.parametrize("size", [(30, 30, 30, 4)])
+@pytest.mark.parametrize("dtype", [np.uint8])
+def test_filter_temporal_dataset(temporal_interval, bounding_box, random_raster_data):
+    input_cube = create_fake_rastercube(
+        data=random_raster_data,
+        spatial_extent=bounding_box,
+        temporal_extent=temporal_interval,
+        bands=["B02", "B03", "B04", "B08"],
+        backend="dask",
+        as_dataset=True,
+    )
+
+    temporal_interval_part = TemporalInterval.model_validate(
+        ["2018-05-15T00:00:00", "2018-06-01T00:00:00"]
+    )
+    output_cube = filter_temporal(data=input_cube, extent=temporal_interval_part)
+
+    assert set(output_cube.data_vars) == {"B02", "B03", "B04", "B08"}
+    assert len(output_cube.t) < len(input_cube.t)

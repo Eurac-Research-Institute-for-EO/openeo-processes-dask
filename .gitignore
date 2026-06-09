@@ -163,3 +163,7 @@ cython_debug/
 
 notebooks/
 poetry.lock
+
+# Local tracking
+dev_remodel_review.md
+AGENTS.md
