@@ -38,16 +38,9 @@ The migration from `xr.DataArray` to `xr.Dataset` for RasterCube changes the mem
 
 ## Dataset migration record
 
-The migration was completed on `dev_remodel` in reviewable phases:
-
-| Commit | Scalability relevance |
-|---|---|
-| `30ad4c5` | Added Dataset-aware L1 apply/reduce paths and Dataset comparisons in shared test helpers. |
-| `56f9feb`, `47481a0`, `d1172dc` | Added Dataset-native paths for filters, NDVI, temporal aggregation, mask, kernel handling, and merge behavior. |
-| `022a912` | Added Dataset support for random forest prediction inputs. |
-| `2f4ec02`, `4711606` | Enforced Dataset at public RasterCube boundaries and made Dataset the default raster test fixture. |
-| `fd075db` | Fixed `Dataset.dims` mapping compatibility in `apply_neighborhood_intertwin`. |
-| `3e3ad49`–`11612fd` | Review-fix cycle: native Dataset merge, removed `.compute()` in predict, per-variable attrs preservation across `to_array` bridges. |
+The migration chronology is maintained in
+[`docs/decisions/rastercube-dataset-migration-history.md`](../decisions/rastercube-dataset-migration-history.md).
+This scalability document only records runtime trade-offs.
 
 ## Known patterns that break laziness
 
@@ -57,12 +50,12 @@ The migration was completed on `dev_remodel` in reviewable phases:
 
 ## Bounded DataArray bridges
 
-Some internals still need a DataArray-shaped representation. These bridges are local, lazy for dask-backed arrays, and preserve variable order and attributes via `_capture_var_metadata`/`_restore_var_metadata`:
+Some internals still need a DataArray-shaped representation. These bridges are local, lazy for dask-backed arrays, and preserve variable order and attributes via the helpers in `cubes/dataset_bridge.py`:
 
 - Virtual band operations use `to_array(dim="bands")` because xarray has no real Dataset dimension for data variables.
 - `run_udf` adapts Dataset input to the openEO UDF `XarrayDataCube` interface and converts the result back to Dataset.
 - `fit_curve` bridges Dataset input through a band axis while fitting, then restores the Dataset shape.
-- `merge_cubes` uses native Dataset merge (no bridge) — introduced in Phase 1 of the review-fix cycle.
+- `merge_cubes` uses a Dataset boundary path, but same-name variable conflicts still delegate to per-variable DataArray merge logic.
 
 ## Non-raster paths
 

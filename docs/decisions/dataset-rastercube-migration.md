@@ -1,22 +1,17 @@
-# RasterCube: xr.Dataset as the native raster type
+# RasterCube: `xr.Dataset` as the native raster type
 
 Date: 2026-05-23
 
-Status: accepted and implemented on `dev_remodel`
-
-## Context
-
-openEO raster cubes are logically multidimensional arrays with axes `(t, bands, y, x)`. The codebase historically represented them as `xr.DataArray` with a "bands" dimension. This worked, but had a fundamental mismatch: openEO bands are named labels with semantics, not just another axis. Every band carries its own metadata, CRS, and nodata handling - things a flat DataArray dimension struggles to preserve.
-
-The upstream reference PR ([openeo-processes-dask#372](https://github.com/Open-EO/openeo-processes-dask/pull/372)) adopted `xr.Dataset` to fix this. This repo (`openeo-processes-dask-slim`) follows suit.
-
-The remodel plan also called out an implementation risk: a blanket `Dataset -> DataArray -> old implementation -> Dataset` wrapper hides Dataset semantics and can drop metadata or variables. The migration therefore makes `xr.Dataset` the public RasterCube contract and keeps any DataArray bridge local to process paths that structurally require a band axis, such as virtual-band reducers or UDF adapters.
+Status: accepted and implemented on `dev-remodel`
 
 ## Decision
 
-**`RasterCube = xr.Dataset`**, with bands stored as named data variables:
+`RasterCube` is `xr.Dataset`.
 
-```
+Bands are represented as Dataset data variables, not as a physical xarray
+dimension:
+
+```text
 Dataset
   B02: (t, y, x)
   B03: (t, y, x)
@@ -25,72 +20,88 @@ Dataset
   attrs: {crs, ...}
 ```
 
-Key rules:
+The logical openEO cube still has a virtual `(t, bands, y, x)` shape. In this
+repository, `bands` is interpreted as `list(dataset.data_vars)`.
 
-- **Bands are data variables**, not a named xarray dimension. The logical `(t, bands, y, x)` order is virtual: `bands` = `list(dataset.data_vars)`.
-- **Public process boundaries assume `xr.Dataset`**. The type alias `RasterCube = xr.Dataset` provides static enforcement for type checkers. No runtime guard is needed — all raster inputs are expected to be Dataset already.
-- **Virtual dimension `"bands"`** is handled explicitly in `apply_dimension`, `reduce_dimension`, `filter_labels`, and band-aware helpers. Cross-band operations may create a lazy temporary band axis, but the public result remains a Dataset.
-- **Real dimensions** (`t`, `y`, `x`) use Dataset-aware xarray operations: `xr.apply_ufunc`, `Dataset.reduce`, `where`, `xr.merge`, or per-variable iteration.
-- **Tests default to Dataset** through `create_fake_rastercube(..., as_dataset=True)`, so new raster process coverage exercises the target model by default.
+## Current Contract
 
-## What changed
+- Public RasterCube process inputs and outputs are `xr.Dataset`.
+- Public raster process boundaries use `ensure_raster_cube` where appropriate
+  to reject RasterCube-shaped `xr.DataArray` inputs with a clear error.
+- Dataset data variables are the user-visible band labels.
+- Real dimensions such as `t`, `y`, and `x` use Dataset-aware xarray APIs or
+  explicit per-variable iteration.
+- Virtual band operations may temporarily bridge through `xr.DataArray` via
+  `cubes/dataset_bridge.py`.
+- `load_stac` returns an `xr.Dataset` RasterCube.
+- VectorCube, scalar, array, and UDF adapter internals may still use
+  `xr.DataArray` where that is their actual API contract. That is not public
+  RasterCube fallback support.
 
-| Area | Before | After |
-|---|---|---|
-| Type alias | `Union[xr.DataArray, xr.Dataset]` | `xr.Dataset` |
-| Test default | `as_dataset=False` | `as_dataset=True` |
-| Band access | `.sel(bands="B02")` | `dataset["B02"]` |
-| `.data` checks | `isinstance(cube.data, da.Array)` | per-variable `isinstance(var.data, da.Array)` |
-| Cross-band reduce | `data.reduce(reducer, dim="bands")` | `to_array("bands")` → reduce → `to_dataset("bands")` with per-variable attrs preserved |
-| Per-variable attrs | Dropped across `to_array` bridges | Preserved via `_capture_var_metadata`/`_restore_var_metadata` |
-| Test fixtures | DataArray unless explicitly converted | Dataset by default |
+## Bounded DataArray Bridges
 
-## Implementation record
+Some operations structurally need a band axis or an external DataArray-shaped
+API. These paths must stay local and explicit:
 
-The relevant `dev_remodel` commits are:
+- `apply_dimension(..., dimension="bands")`
+- `reduce_dimension(..., dimension="bands")`
+- `fit_curve` / `predict_curve`
+- `run_udf`
 
-| Commit | Purpose |
-|---|---|
-| `30ad4c5` | L1 minimal Dataset migration: `ensure_raster_cube` helper, Dataset-aware `apply_dimension` and `reduce_dimension`, Dataset-aware test comparisons. |
-| `b6608dd`, `56f9feb`, `47481a0` | L2 and L2A process coverage: dimension helpers, filters, NDVI, temporal aggregation, mask, and kernel handling. |
-| `d1172dc`, `022a912` | L3 and ML coverage: `merge_cubes`, mask tests, and `predict_random_forest` Dataset support. |
-| `8e162fa`, `c31e490` | Final enforcement plan added to `plan_document.md` and kept current during the migration. |
-| `b5ed758`, `2f4ec02`, `9c90626`, `4711606` | Final enforcement: `RasterCube = xr.Dataset`, `ensure_raster_cube` rejects DataArray, dead L1 imports removed, Dataset test default enabled. |
-| `fd075db` | Dataset `dims` compatibility fix for `apply_neighborhood_intertwin` and plan status cleanup. |
-| `3e3ad49` | Phase 0 review fixes: `create_data_cube()` returns `Dataset`, tie-breaking restored in `resample_cube_temporal`, `ensure_raster_cube` removed, Python 3.13/3.14 classifiers dropped. |
-| `c30d8c9` | Phase 1: native Dataset `merge_cubes` — replaces `to_array` bridge, preserves variable order/attrs/CRS, fixes `_align_coordinates` in-place mutation. |
-| `2f1c2bc` | Phase 2: remove `.compute()` from `predict_random_forest` — dask arrays flow through `dxgb.inplace_predict` natively. |
-| `cc36e01` | Phase 3: per-variable attrs preserved across all `to_array` bridges via `_capture_var_metadata`/`_restore_var_metadata`. |
-| `11612fd` | Phase 4: `array_find` return type documented (filled arrays, not masked). |
+Bridge helpers live in `openeo_processes_dask/process_implementations/cubes/dataset_bridge.py`:
 
-As of the completed review-fix cycle on `dev_remodel`:
+- `capture_dataset_metadata`
+- `restore_dataset_metadata`
+- `dataset_to_virtual_bands`
+- `virtual_bands_to_dataset`
+- `detect_band_permutation`
 
-- `RasterCube = xr.Dataset` with no runtime rejection guard.
-- `merge_cubes` uses native Dataset merge.
-- `predict_random_forest` does not call `.compute()` on raster payloads.
-- All `to_array` bridges preserve per-variable attrs and variable order.
-- Test fixture defaults and remaining process paths were migrated to Dataset compatibility.
+These helpers preserve variable order, per-variable attributes, Dataset
+attributes, CRS where possible, and dask laziness. `Dataset.to_array` still has
+real xarray semantics: heterogeneous dtypes can be coerced, and variables must
+be alignable as one virtual array.
 
-## Consequences
+## Remaining Deviations and Risks
 
-### Positive
+- Virtual-band bridges can coerce dtype and align/broadcast variables before
+  process-specific logic runs.
+- `detect_band_permutation` infers band reordering from sampled data values and
+  can be ambiguous when sampled values are identical across bands.
+- `merge_cubes` has a Dataset boundary path, but same-name variable conflicts
+  still delegate to per-variable `DataArray` merge logic.
+- Per-variable Dataset operations can create task graph overhead proportional
+  to band count.
+- `predict_random_forest` is safe when `model.feature_names` is present. If a
+  model has no feature metadata, callers should provide
+  `context={"feature_order": [...]}`; otherwise Dataset variable order is used
+  with a warning.
 
-- **Semantic correctness**: Bands carry their own metadata, CRS, dtype — no more implicit assumptions from a shared dimension.
-- **Multi-variable safety**: Impossible to accidentally drop or misalign bands. Each variable is independently addressable.
-- **Future-proofing**: Aligns with upstream openeo-processes-dask direction.
-- **Better test pressure**: Dataset is the default test cube shape, so new process tests are less likely to pass only through legacy DataArray behavior.
+## Verification
 
-### Negative
+Current audit environment:
 
-- **Band operations need extra ceremony**: Cross-band processes (`reduce_dimension(dimension="bands")`, `apply_dimension(dimension="bands")`) need a temporary virtual band axis, adding graph overhead for wide band collections.
-- **Some xarray APIs behave differently on Dataset**: `data.dims` returns a frozen mapping (not a tuple), `data.transpose()` works per-variable, etc. These surface as `TypeError` at runtime.
-- **`.data` / `.values` on the cube itself no longer exists**: Callers must iterate `data_vars`. This required rewriting ~50 test assertions.
-- **Compatibility adapters remain visible**: UDF, curve fitting still bridge through a DataArray-shaped representation because the external or existing API expects one. These paths preserve band order, attrs, and laziness via `_capture_var_metadata`/`_restore_var_metadata` helpers.
-- **`merge_cubes` uses native Dataset merge**: The original `to_array`→`to_dataset` bridge was replaced with a per-variable merge that preserves variable order, per-variable attrs, and CRS.
+- Python 3.12
+- `zarr 2.18.7`, matching `pyproject.toml`
+- editable install with `pip install -e . --no-deps`
 
-### Scalability
+Relevant verification:
 
-- Dask laziness is preserved for Dataset-native process paths and for `to_array`/`to_dataset` conversions as long as the underlying arrays are dask-backed.
-- Per-variable iteration does not materialize data: `for var in dataset.data_vars.values()` yields lazy DataArrays.
-- Memory footprint per variable is smaller than a full 4D DataArray, which helps when individual bands are processed independently.
-- The virtual bands path (`to_array` then reduce/apply) creates a temporary stacked DataArray in the task graph. For wide band collections (100+ bands), this can increase graph size even when it does not immediately load data into memory. Mitigate by processing bands in groups if needed.
+```bash
+python -m pytest tests/test_dataset_bridge.py tests/test_multiresolution.py -q
+python -m pytest tests/test_rastercube_boundary.py tests/test_mask.py tests/test_filter.py tests/test_merge.py -q
+python -m pytest tests/test_ml.py -q
+python -m pytest tests/test_load_stac.py::test_load_stac -q
+python -m pytest -q
+```
+
+Latest full-suite result from the audit:
+
+```text
+418 passed, 3 skipped
+```
+
+## Related Documents
+
+- [RasterCube Dataset migration history](rastercube-dataset-migration-history.md)
+- [Scalability notes](../scalability/README.md)
+- [Known issues](../../KNOWN_ISSUES.md)
