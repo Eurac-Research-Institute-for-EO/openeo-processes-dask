@@ -1,128 +1,102 @@
 # Known Issues
 
-This document tracks known issues and technical debt in the codebase, primarily related to the data model migration from `xr.DataArray` (bands as a dimension axis) to `xr.Dataset` (bands as named data variables).
+This document tracks confirmed current issues and technical debt in the codebase. It was audited against the current repository state on 2026-06-10 with Python 3.12.
 
-## 1. Incomplete Migration — Untested Legacy DataArray Paths
+The main historical migration from `xr.DataArray` raster cubes with a `bands` dimension to `xr.Dataset` raster cubes with bands as data variables is largely complete at the public raster-cube process boundary. `RasterCube` is defined as `xr.Dataset` in `data_model.py`, and the main cube processes now reject `xr.DataArray` raster-cube inputs through `ensure_raster_cube`.
 
-`RasterCube` is defined as `xr.Dataset` in `data_model.py`, but the codebase still contains **~23 `isinstance(xr.Dataset)` guards** with corresponding legacy `xr.DataArray` fallback paths.
+## 1. Virtual-Band Bridge Constraints
 
-Affected files:
+Several processes still need to temporarily convert Dataset variables into a synthetic `bands` dimension:
 
-| File | Issue |
-|---|---|
-| `cubes/mask.py` | Full ~100-line DataArray path alongside `_mask_dataset` |
-| `cubes/_filter.py` | `filter_bands` and `filter_labels` have `isinstance` guards with `.sel(band_dim=...)` fallback |
-| `cubes/apply.py` | `apply_dimension` band path uses `isinstance` guard |
-| `cubes/reduce.py` | `reduce_dimension` band path uses `isinstance` guard |
-| `cubes/merge.py` | Dataset path delegates per-variable back to DataArray path recursively |
-| `cubes/general.py` | `dimension_labels`, `rename_labels`, `trim_cube` have band-specific guards |
-| `cubes/indices.py` | `ndvi` has `isinstance` guard |
-| `cubes/geometries.py` | Lines 126, 157 have `isinstance(xr.DataArray)` checks |
-| `arrays.py` | Lines 53, 415 have `isinstance(xr.DataArray)` checks |
+- `apply_dimension(..., dimension="bands")`
+- `reduce_dimension(..., dimension="bands")`
+- `fit_curve` / `predict_curve`
+- `run_udf`
 
-**Impact**: The test infrastructure defaults to `as_dataset=True`, so these DataArray paths receive **no test coverage**. They are untested dead code.
-
-**Recommendation**: Strip all `isinstance(data, xr.DataArray)` fallback paths. If `RasterCube` is `xr.Dataset`, enforce it uniformly.
-
----
-
-## 2. `to_array` / `to_dataset` Bridge Risks
-
-Any cross-band operation (`reduce_dimension` on bands, `apply_dimension` on bands, UDF adaptation, `fit_curve`) must convert via:
+The bridge is implemented in `cubes/dataset_bridge.py` via:
 
 ```python
-band_array = data.to_array(dim="bands")    # Dataset → DataArray
-# ... operate ...
-result = result.to_dataset(dim="bands")    # DataArray → Dataset
+array, meta = dataset_to_virtual_bands(dataset, dim="bands")
+result = virtual_bands_to_dataset(array, meta, dim="bands")
 ```
 
-### 2a. Dtype Coercion
+This is intentional, but it has limits:
 
-`xr.DataArray` requires all values to share a single dtype. If bands have heterogeneous dtypes (e.g., `int16` reflectance vs `float32` thermal), `to_array` upcasts everything to the most general type, potentially doubling memory.
+- Heterogeneous band dtypes are coerced by `Dataset.to_array`; the test suite documents this in `tests/test_dataset_bridge.py::TestVirtualBandsToDataset::test_heterogeneous_dtype_round_trip`.
+- Multi-resolution or differently gridded variables must be representable as one aligned virtual array before the reducer/UDF/curve process runs.
+- Per-variable attrs, dataset attrs, variable order, and CRS depend on explicit capture/restore logic.
 
-### 2b. Metadata Round-Trip Fragility
+Current coverage exists in `tests/test_dataset_bridge.py` and `tests/test_multiresolution.py`, so the older claim that this bridge has no dedicated tests is stale. The remaining issue is architectural: bridge users should stay local and explicit, and new virtual-band processes should add tests for dtype coercion, metadata round-trips, dask laziness, and multi-resolution behavior.
 
-Per-variable attributes and variable order must be manually preserved via `_capture_var_metadata` / `_restore_var_metadata` in `cubes/utils.py`. This is the caller's responsibility and is not enforced. Missing or corrupted attribute round-trips pass silently.
+## 2. Fragile Band Permutation Detection
 
-### 2c. No Dedicated Test Coverage
+`detect_band_permutation` in `cubes/dataset_bridge.py` tries to infer whether an `apply_dimension(..., dimension="bands")` callback reordered bands. It samples the first element along every non-band dimension and matches values with `np.allclose`.
 
-The bridge pattern, metadata round-trip, and dtype coercion behavior lack dedicated test coverage.
+Risk: if the sampled position has identical values for multiple bands, for example all zeros or all NaN at the first `t/y/x` location, the matching can be ambiguous. The function then returns the first valid matching order it can infer, or `None`, and `apply_dimension` falls back to the original label order.
 
-### 2d. Multi-Resolution Limits
+This can mislabel bands after a callback permutation when data values are not sufficiently distinctive at the sampled point.
 
-`xr.Dataset` can hold variables with different dimensionality and coordinate grids, which is one reason for the migration. The bridge pattern partially gives up that advantage: `Dataset.to_array(dim="bands")` must align variables into one array-like shape. For genuinely multi-resolution datasets, this can trigger implicit alignment, broadcasting, missing values, dtype coercion, or graph growth before the process-specific reducer even runs.
+Recommendation: prefer explicit label propagation from callback outputs where possible. If inference must remain, sample more than one position or reject ambiguous matches instead of silently retaining the original order.
 
-**Recommendation**: Keep `to_array` bridges local and explicit, add tests with bands on different spatial grids/resolutions, and document which virtual-band processes require prior harmonization.
----
+## 3. Dataset `merge_cubes` Still Uses DataArray Conflict Logic
 
-## 3. Dead Validation: `ensure_raster_cube`
-
-`ensure_raster_cube` in `cubes/utils.py` rejects non-Dataset inputs with a clear error message but is **never called** from any process. It is unused dead code.
-
-**Recommendation**: Either call it as a guard in every process, or remove it.
-
----
-
-## 4. Fragile Band Permutation Detection
-
-`_detect_band_permutation` in `cubes/utils.py` tries to determine if a callback reordered bands by sampling the first valid element along non-band dimensions and matching via `np.allclose`.
-
-**Risk**: If the first element along non-band dimensions has identical values for multiple bands (e.g., all zeros or all NaN at `t=0, y=0, x=0`), the matching is ambiguous. The function returns `None` in this case, which silently falls back to the original label order — potentially mislabeling all bands after a permutation.
-
----
-
-## 5. `merge_cubes` — Dataset Path Depends on DataArray Logic
-
-The Dataset path in `merge_cubes` (line 71) delegates per-variable merging back to the **DataArray path recursively**:
+Public `merge_cubes` no longer accepts `xr.DataArray` raster-cube inputs. However, the Dataset implementation still resolves same-named variable conflicts by delegating each variable pair to `merge_dataarray_cubes`:
 
 ```python
-result_vars[var] = merge_cubes(cube1[var], cube2[var], overlap_resolver, context)
+result_vars[var] = merge_dataset_variable_conflict(
+    var,
+    cube1[var],
+    cube2[var],
+    overlap_resolver=overlap_resolver,
+    context=context,
+)
 ```
 
-This means all ~230 lines of the DataArray merge logic (dimension alignment, overlap resolution, broadcast) are still exercised even for Dataset inputs. Bugs in the DataArray path affect Dataset users.
+This is not a public legacy-raster-cube fallback, but it does mean Dataset conflict behavior inherits the DataArray merge implementation for dimension alignment, overlap resolution, broadcasting, and chunking.
 
-**Multi-resolution impact**: `merge_cubes` is one of the most important processes for combining cubes with different spatial or temporal grids. The current Dataset path preserves data variables, attrs, order, and CRS at the Dataset boundary, but same-named variable conflicts still inherit the old DataArray alignment semantics. This should be treated as a high-priority review area for multi-resolution workflows.
----
+Multi-resolution impact: non-conflicting variables are preserved at the Dataset boundary, but conflicts between same-named variables still use per-variable DataArray semantics. This remains a high-priority area for review in multi-resolution workflows.
 
-## 6. Per-Variable Loop Overhead
+## 4. Per-Variable Loop Overhead
 
-Processes that iterate over data variables (`apply_kernel`, `mask`) pay Python overhead proportional to the number of bands. Each iteration creates a separate `apply_ufunc` (or `where`) call with its own task graph. The DataArray approach processed the full 4D cube in a single operation.
+Processes that iterate over Dataset variables, such as `apply_kernel` and `mask`, pay Python and task-graph overhead proportional to the number of bands. Each variable can create a separate `apply_ufunc`, `where`, or related dask graph segment.
 
-This is a correctness-preserving trade-off but has measurable performance implications for cubes with many bands.
+This is a correctness-preserving trade-off of the Dataset model, but it can be slower or produce larger graphs than the old single 4D DataArray representation for many-band cubes.
 
+Current coverage includes graph-size checks in `tests/test_graph_size.py`; the remaining work is performance characterization and thresholds for representative many-band workloads.
 
----
+## 5. `predict_random_forest` Ordering Depends on Model Metadata
 
-## 7. `predict_random_forest` Feature Ordering Risk
+The stale issue claimed that `predict_random_forest` silently fell back to Dataset variable order when Dataset variables did not exactly match `model.feature_names`. That has been fixed: the current implementation raises on missing or extra variables and orders Dataset variables according to `model.feature_names`.
 
-`predict_random_forest` supports Dataset input by stacking data variables into a feature axis:
+The remaining risk is limited to models without `feature_names`. In that case the implementation uses `context["feature_order"]` if provided; otherwise it warns and falls back to Dataset variable order:
 
 ```python
-feature_names = model.feature_names
-data_vars = list(data.data_vars)
-if set(data_vars) != set(feature_names):
-    ordered_vars = data_vars
-else:
-    ordered_vars = feature_names
+Model has no feature_names and context['feature_order'] is not set.
+Using Dataset variable order.
 ```
 
-If the Dataset variable names do not match the model feature names exactly, the implementation silently falls back to the Dataset variable order. This can produce valid-looking predictions with the wrong feature ordering.
+Recommendation: callers should provide `context={"feature_order": [...]}` for models without feature metadata, and tests should keep covering the warning path.
 
-**Impact**: The output remains an `xr.Dataset` and can preserve dask laziness, so this error may not surface structurally. It is a semantic correctness risk.
+## 6. Test Environment Notes
 
-**Recommendation**: Fail fast when model feature names and Dataset variables differ, unless the caller explicitly provides a feature mapping or ordered variable list.
+In the Python 3.12 micromamba environment used for this audit:
 
----
+- Installed package metadata with `pip install -e . --no-deps`; a full extras install tried to build `gdal==3.13.1` against system `libgdal 3.8.4` and failed.
+- Reinstalled the pinned Zarr dependency from `pyproject.toml`: `zarr 2.18.7`.
+- `tests/test_dataset_bridge.py tests/test_multiresolution.py -q`: passed, 48 tests.
+- `tests/test_rastercube_boundary.py tests/test_mask.py tests/test_filter.py tests/test_merge.py -q`: passed, 49 tests.
+- `tests/test_ml.py -q`: passed, 10 tests.
+- `tests/test_load_stac.py::test_load_stac -q`: passed, 1 test.
+- Full `pytest -q`: passed, 418 tests and 3 skipped.
 
-## 8. Random-Forest ML Test Isolation Instability
+The older documented xgboost/dask test-isolation failure did not reproduce as of this audit.
 
-The random-forest tests pass individually in a Python 3.12 environment with local dask networking enabled, but the full `tests/test_ml.py` module is unstable. In the investigation environment:
+## Resolved or Stale Historical Notes
 
-- `test_fit_regr_random_forest` passed.
-- `test_fit_regr_random_forest_inline_geojson` passed when run alone.
-- `test_predict_random_forest_dask` passed when run alone.
-- Running the full module failed in `test_fit_regr_random_forest_inline_geojson` with an `xgboost.dask` worker-address `KeyError` after an earlier random-forest training test.
+The following older claims are no longer accurate:
 
-This points to dask/xgboost lifecycle or test-isolation problems rather than a direct Dataset migration failure.
-
-**Recommendation**: Use a smaller deterministic dask client fixture for xgboost tests, ensure each test fully closes workers before the next training run, and consider separating expensive xgboost integration tests from Dataset-shape unit tests.
+- The main cube processes still have broad untested legacy `xr.DataArray` raster-cube fallback paths. Current boundary tests in `tests/test_rastercube_boundary.py` verify rejection for many cube processes.
+- `ensure_raster_cube` is unused dead code. It is now called by many cube processes, including filtering, masking, applying, reducing, indexing, geometry-related, and general dimension processes.
+- The Dataset bridge lacks dedicated tests. `tests/test_dataset_bridge.py` now covers metadata capture/restore, CRS, dask laziness, dtype coercion behavior, round-tripping, and band permutation detection.
+- The full `tests/test_ml.py` module is currently unstable in Python 3.12. It passed during this audit.
+- The full-suite failure seen during the first audit run was caused by an environment mismatch (`zarr 3.2.1`). It passed after reinstalling `zarr 2.18.7`, which is the version range pinned by `pyproject.toml`.
