@@ -98,7 +98,7 @@ def apply_dimension(
         # dimension labels preserved
         # if the number of source dimension's values is equal to the number of computed values
         if len(reordered_data[dimension]) == result_len:
-            reordered_result[dimension] == reordered_data[dimension].values
+            reordered_result[dimension] = reordered_data[dimension].values
         else:
             reordered_result[dimension] = np.arange(result_len)
     elif target_dimension in reordered_result.dims:
