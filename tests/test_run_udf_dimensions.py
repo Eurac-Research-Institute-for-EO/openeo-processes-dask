@@ -69,3 +69,35 @@ class TestRunUdfRestoresDimensions:
         """Without metadata the cube stays generic, but nothing blows up."""
         out = run_udf(np.zeros((2, 3)), UDF_REPORT_DIMS, "Python", context={})
         assert len(out.values) == 2
+
+
+class TestGenericDataArrayInput:
+    """apply_dimension actually delivers a DataArray that ALREADY carries
+    generic names (dim_0..dim_N), not a bare numpy array — verified live from
+    a job probe. The isinstance(DataArray) branch must therefore be repaired
+    too, otherwise the fix never runs in production.
+    """
+
+    def test_dataarray_with_generic_dims_is_repaired(self):
+        # shape as apply_dimension delivers it: target dim ('t') moved last
+        cube = xr.DataArray(np.zeros((1, 76, 78, 152)))
+        assert all(str(d).startswith("dim_") for d in cube.dims)
+        out = run_udf(
+            cube,
+            UDF_REPORT_DIMS,
+            "Python",
+            context=_context(("t", "bands", "y", "x"), (152, 1, 76, 78)),
+        )
+        seen = [str(d) for d in out.values]
+        assert not any(d.startswith("dim_") for d in seen), seen
+        assert seen[-1] == "t", seen
+
+    def test_semantic_dataarray_untouched(self):
+        cube = xr.DataArray(np.zeros((2, 3)), dims=("bands", "x"))
+        out = run_udf(
+            cube,
+            UDF_REPORT_DIMS,
+            "Python",
+            context=_context(("bands", "x"), (2, 3)),
+        )
+        assert [str(d) for d in out.values] == ["bands", "x"]
