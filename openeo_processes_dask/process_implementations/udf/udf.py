@@ -20,18 +20,15 @@ def run_udf(
     runtime: str,
     context: Optional[dict] = None,
 ) -> RasterCube:
-    # Preserve dimension names and coordinates if input is already an xr.DataArray
-    if isinstance(data, xr.DataArray):
-        # Input is already a proper xr.DataArray (RasterCube), preserve its structure
-        data_cube = XarrayDataCube(data)
-    else:
-        # Input is a dask/numpy array (this is how apply_dimension delivers it),
-        # so xr.DataArray gives generic dim_0..dim_N names. Restore the semantic
-        # names here from the metadata apply_dimension puts in the context, so
-        # UDFs receive a properly named cube and stay portable — they must not
-        # have to import backend internals to repair it themselves (issue #24).
-        cube = fix_udf_dimensions(xr.DataArray(data), context)
-        data_cube = XarrayDataCube(cube)
+    # apply_dimension hands over an array whose dimension names are generic
+    # (dim_0..dim_N) — sometimes already wrapped as a DataArray, sometimes raw —
+    # so restore the semantic names from the _openeo_dimension_metadata that
+    # apply_dimension puts in the context. Doing it here keeps UDFs portable:
+    # they must not have to import backend internals to repair the cube (#24).
+    # fix_udf_dimensions is a no-op when the names are already semantic.
+    cube = data if isinstance(data, xr.DataArray) else xr.DataArray(data)
+    cube = fix_udf_dimensions(cube, context)
+    data_cube = XarrayDataCube(cube)
     data = UdfData(datacube_list=[data_cube], user_context=context)
     result = run_udf_code(code=udf, data=data)
     cubes = result.get_datacube_list()
