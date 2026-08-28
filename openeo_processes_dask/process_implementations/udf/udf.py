@@ -7,6 +7,9 @@ from openeo.udf.run_code import run_udf_code
 from openeo.udf.xarraydatacube import XarrayDataCube
 
 from openeo_processes_dask.process_implementations.data_model import RasterCube
+from openeo_processes_dask.process_implementations.udf.dimension_helper import (
+    fix_udf_dimensions,
+)
 
 __all__ = ["run_udf"]
 
@@ -22,8 +25,13 @@ def run_udf(
         # Input is already a proper xr.DataArray (RasterCube), preserve its structure
         data_cube = XarrayDataCube(data)
     else:
-        # Input is a dask/numpy array, convert to xr.DataArray (will have generic dims)
-        data_cube = XarrayDataCube(xr.DataArray(data))
+        # Input is a dask/numpy array (this is how apply_dimension delivers it),
+        # so xr.DataArray gives generic dim_0..dim_N names. Restore the semantic
+        # names here from the metadata apply_dimension puts in the context, so
+        # UDFs receive a properly named cube and stay portable — they must not
+        # have to import backend internals to repair it themselves (issue #24).
+        cube = fix_udf_dimensions(xr.DataArray(data), context)
+        data_cube = XarrayDataCube(cube)
     data = UdfData(datacube_list=[data_cube], user_context=context)
     result = run_udf_code(code=udf, data=data)
     cubes = result.get_datacube_list()
