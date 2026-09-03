@@ -230,3 +230,7 @@ def fix_dimensions(cube: xr.DataArray, **kwargs) -> xr.DataArray:
 # Utilities, not openEO processes: keep them out of "from ... import *" so the
 # executor does not try to register them as processes and fail on a missing spec.
 __all__ = []
+
+# Utilities, not openEO processes: keep them out of "from ... import *" so the
+# executor does not try to register them as processes and fail on a missing spec.
+__all__ = []
