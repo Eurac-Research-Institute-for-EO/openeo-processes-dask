@@ -226,3 +226,8 @@ def fix_dimensions(cube: xr.DataArray, **kwargs) -> xr.DataArray:
 
         warnings.warn(f"Dimension fixing failed: {e}. Returning original cube.")
         return cube
+
+
+# Utilities, not openEO processes: keep them out of "from ... import *" so the
+# executor does not try to register them as processes and fail on a missing spec.
+__all__ = []
