@@ -94,7 +94,17 @@ def _get_dimension_names_from_stac(stac_validator_obj):
     dim_names = {"x": "x", "y": "y", "t": "t", "bands": "bands"}
     try:
         stac_content = stac_validator_obj.stac_content
-        if "cube:dimensions" in stac_content:
+        # Only honour cube:dimensions when the datacube extension is actually
+        # declared. The openEO client does the same (pystac ext.has("cube")):
+        # without the declaration it ignores cube:dimensions and falls back to
+        # the canonical names, so a collection carrying an undeclared
+        # cube:dimensions made client and backend disagree on the temporal
+        # dimension ("t" vs "time") — neither name worked.
+        # See openeo-argoworkflows#172.
+        declares_datacube_ext = any(
+            "datacube" in str(ext) for ext in stac_content.get("stac_extensions", [])
+        )
+        if declares_datacube_ext and "cube:dimensions" in stac_content:
             cube_dims = stac_content["cube:dimensions"]
             for dim_name, dim_info in cube_dims.items():
                 if "axis" in dim_info and dim_info["axis"] == "x":
