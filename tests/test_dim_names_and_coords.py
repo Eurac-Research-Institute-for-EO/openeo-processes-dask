@@ -57,15 +57,15 @@ class TestDimensionNames:
         assert names["t"] == "time"
 
     def test_missing_stac_extensions_key_falls_back(self):
-        names = _get_dimension_names_from_stac(_Validator({"cube:dimensions": _CUBE_DIMS}))
+        names = _get_dimension_names_from_stac(
+            _Validator({"cube:dimensions": _CUBE_DIMS})
+        )
         assert names["t"] == "t"
 
 
 class TestApplyDimensionCoords:
     def _cube(self):
-        t = np.array(
-            ["2020-06-01", "2020-06-02", "2020-06-03"], dtype="datetime64[ns]"
-        )
+        t = np.array(["2020-06-01", "2020-06-02", "2020-06-03"], dtype="datetime64[ns]")
         return xr.DataArray(
             np.arange(3 * 2 * 2, dtype="float64").reshape(3, 2, 2),
             dims=("t", "y", "x"),
