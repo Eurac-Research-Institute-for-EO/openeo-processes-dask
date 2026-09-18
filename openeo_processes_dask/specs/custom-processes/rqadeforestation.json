@@ -1,0 +1,57 @@
+{
+    "id": "rqadeforestation",
+    "summary": "Detect deforestation trends with RQA",
+    "description": "Applies the RQATrend recurrence-quantification-analysis trend detector along one axis of a data cube to identify deforestation. Requires the optional `deforestation` extra (rqadeforestation).",
+    "categories": [
+        "experimental"
+    ],
+    "experimental": true,
+    "parameters": [
+        {
+            "name": "data",
+            "description": "The data to analyse.",
+            "schema": {
+                "type": "array",
+                "items": {
+                    "type": [
+                        "number",
+                        "null"
+                    ]
+                }
+            }
+        },
+        {
+            "name": "threshold",
+            "description": "Trend threshold above which a change is reported.",
+            "schema": {
+                "type": "number"
+            },
+            "optional": true,
+            "default": 0.5
+        },
+        {
+            "name": "axis",
+            "description": "Index of the axis to apply the detector along.",
+            "schema": {
+                "type": [
+                    "integer",
+                    "null"
+                ]
+            },
+            "optional": true,
+            "default": null
+        }
+    ],
+    "returns": {
+        "description": "The computed trend values.",
+        "schema": {
+            "type": "array",
+            "items": {
+                "type": [
+                    "number",
+                    "null"
+                ]
+            }
+        }
+    }
+}
